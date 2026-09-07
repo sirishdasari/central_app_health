@@ -23,6 +23,7 @@ class HealthService {
       HealthDataType.HEART_RATE,
       HealthDataType.SLEEP_ASLEEP,
       HealthDataType.ACTIVE_ENERGY_BURNED,
+      HealthDataType.TOTAL_CALORIES_BURNED,
       HealthDataType.BLOOD_OXYGEN,
     ];
     try {
@@ -44,6 +45,7 @@ class HealthService {
       HealthDataType.HEART_RATE,
       HealthDataType.SLEEP_ASLEEP,
       HealthDataType.ACTIVE_ENERGY_BURNED,
+      HealthDataType.TOTAL_CALORIES_BURNED,
       HealthDataType.BLOOD_OXYGEN,
     ];
     try {
@@ -70,10 +72,32 @@ class HealthService {
     }
   }
 
+  Future<List<HealthDataPoint>> _readSleep(DateTime start, DateTime end) async {
+    try {
+      final data = await _health.getHealthDataFromTypes(
+        startTime: start,
+        endTime: end,
+        types: [HealthDataType.SLEEP_ASLEEP],
+      );
+      return data.where((point) {
+        final sourceId = point.sourceId.toLowerCase();
+        final sourceName = point.sourceName.toLowerCase();
+        return sourceId == _samsungHealthSourceId ||
+            sourceName.contains('samsung health') ||
+            sourceName.contains('s health') ||
+            sourceName.contains('com.sec.android.app.shealth');
+      }).toList();
+    } catch (e) {
+      print('Sleep data error: $e');
+      return [];
+    }
+  }
+
   Future<HealthSummary> readToday() async {
     final now = DateTime.now();
     final start = DateTime(now.year, now.month, now.day);
     final data = await getTodayHealthData();
+    final sleepData = await _readSleep(start.subtract(const Duration(hours: 18)), now);
 
     var steps = 0;
     final heartRates = <double>[];
@@ -93,6 +117,7 @@ class HealthService {
           heartRates.add(number);
           break;
         case HealthDataType.ACTIVE_ENERGY_BURNED:
+        case HealthDataType.TOTAL_CALORIES_BURNED:
           calories.add(number);
           break;
         case HealthDataType.BLOOD_OXYGEN:
@@ -103,7 +128,7 @@ class HealthService {
       }
     }
 
-    for (final point in data.where((p) => p.type == HealthDataType.SLEEP_ASLEEP)) {
+    for (final point in sleepData.where((p) => p.type == HealthDataType.SLEEP_ASLEEP)) {
       final from = point.dateFrom.isBefore(start) ? start : point.dateFrom;
       final to = point.dateTo.isAfter(now) ? now : point.dateTo;
       if (to.isAfter(from)) sleepMinutes += to.difference(from).inMinutes;
