@@ -93,14 +93,18 @@ class HealthService {
       switch (point.type) {
         case HealthDataType.HEART_RATE:
           heartRates.add(value);
+          break;
         case HealthDataType.ACTIVE_ENERGY_BURNED:
           calories = (calories ?? 0) + value;
+          break;
         case HealthDataType.BLOOD_OXYGEN:
           oxygens.add(value);
+          break;
         case HealthDataType.SLEEP_ASLEEP:
           final from = point.dateFrom.isBefore(start) ? start : point.dateFrom;
           final to = point.dateTo.isAfter(now) ? now : point.dateTo;
           if (to.isAfter(from)) sleepMinutes += to.difference(from).inMinutes;
+          break;
         default:
           break;
       }
