@@ -1,4 +1,5 @@
 import 'package:health/health.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 class HealthSummary {
   const HealthSummary({
@@ -31,6 +32,13 @@ class HealthService {
 
   Future<bool> ensurePermissions() async {
     await _health.configure();
+
+    // Steps, sleep and several activity metrics require Android's
+    // Activity Recognition runtime permission in addition to Health Connect.
+    if (await Permission.activityRecognition.isDenied) {
+      await Permission.activityRecognition.request();
+    }
+    if (!await Permission.activityRecognition.isGranted) return false;
 
     if (!await _health.isHealthConnectAvailable()) return false;
 
@@ -72,11 +80,16 @@ class HealthService {
     await _health.configure();
 
     final now = DateTime.now();
-    final start = DateTime(now.year, now.month, now.day);
-    final steps = await _health.getTotalStepsInInterval(start, now) ?? 0;
+    final dayStart = DateTime(now.year, now.month, now.day);
+
+    // Sleep is usually recorded after midnight but may start the previous
+    // evening. Read a wider window so last night's sleep is included.
+    final sleepStart = dayStart.subtract(const Duration(hours: 12));
+
+    final steps = await _health.getTotalStepsInInterval(dayStart, now) ?? 0;
 
     final data = await _health.getHealthDataFromTypes(
-      startTime: start,
+      startTime: sleepStart,
       endTime: now,
       types: types.where((type) => type != HealthDataType.STEPS).toList(),
     );
@@ -101,7 +114,7 @@ class HealthService {
           oxygens.add(value);
           break;
         case HealthDataType.SLEEP_ASLEEP:
-          final from = point.dateFrom.isBefore(start) ? start : point.dateFrom;
+          final from = point.dateFrom.isBefore(dayStart) ? dayStart : point.dateFrom;
           final to = point.dateTo.isAfter(now) ? now : point.dateTo;
           if (to.isAfter(from)) sleepMinutes += to.difference(from).inMinutes;
           break;
@@ -110,11 +123,11 @@ class HealthService {
       }
     }
 
-    final dateKey = start.year.toString().padLeft(4, '0') +
+    final dateKey = dayStart.year.toString().padLeft(4, '0') +
         '-' +
-        start.month.toString().padLeft(2, '0') +
+        dayStart.month.toString().padLeft(2, '0') +
         '-' +
-        start.day.toString().padLeft(2, '0');
+        dayStart.day.toString().padLeft(2, '0');
 
     return HealthSummary(
       dateKey: dateKey,
