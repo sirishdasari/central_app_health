@@ -3,7 +3,8 @@ import '../appwrite_health_service.dart';
 import 'health_service.dart';
 
 class HealthScreen extends StatefulWidget {
-  const HealthScreen({super.key});
+  const HealthScreen({super.key, this.onLoggedOut});
+  final VoidCallback? onLoggedOut;
   @override State<HealthScreen> createState() => _HealthScreenState();
 }
 
@@ -56,7 +57,7 @@ class _HealthScreenState extends State<HealthScreen> {
         backgroundColor: Colors.transparent,
         foregroundColor: Colors.white,
         title: const Text('Health', style: TextStyle(fontWeight: FontWeight.w700)),
-        actions: [IconButton(icon: const Icon(Icons.settings_outlined), onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const SyncSettingsScreen())))],
+        actions: [IconButton(icon: const Icon(Icons.settings_outlined), onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => SyncSettingsScreen(onLoggedOut: widget.onLoggedOut))))],
       ),
       body: RefreshIndicator(
         onRefresh: _load,
@@ -175,35 +176,178 @@ class ActivityDetailsScreen extends StatelessWidget {
   );
 }
 
-class SyncSettingsScreen extends StatelessWidget {
-  const SyncSettingsScreen({super.key});
-  @override Widget build(BuildContext context)=>Scaffold(
-    backgroundColor:const Color(0xFF06131A),
-    appBar:AppBar(title:const Text('Sync'),backgroundColor:Colors.transparent,foregroundColor:Colors.white),
-    body:ListView(padding:const EdgeInsets.all(20),children:[
-      Container(padding:const EdgeInsets.all(18),decoration:BoxDecoration(color:const Color(0xFF102820),borderRadius:BorderRadius.circular(18)),child:const Row(children:[
-        Icon(Icons.cloud_done_rounded,color:Color(0xFF45E88F),size:30),SizedBox(width:14),
-        Expanded(child:Text('Daily summaries sync to your MyDaily Appwrite account.',style:TextStyle(color:Colors.white,fontWeight:FontWeight.w600))),
+class SyncSettingsScreen extends StatefulWidget {
+  const SyncSettingsScreen({super.key, this.onLoggedOut});
+  final VoidCallback? onLoggedOut;
+
+  @override
+  State<SyncSettingsScreen> createState() => _SyncSettingsScreenState();
+}
+
+class _SyncSettingsScreenState extends State<SyncSettingsScreen> {
+  final health = HealthService();
+  final auth = AppwriteAuthService();
+  bool history = false;
+  bool background = false;
+  bool busyHistory = false;
+  bool busyBackground = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _refresh();
+  }
+
+  Future<void> _refresh() async {
+    try {
+      final h = await health.isHistoryAuthorized();
+      final b = await health.isBackgroundAuthorized();
+      if (mounted) setState(() { history = h; background = b; });
+    } catch (_) {}
+  }
+
+  Future<void> _historyAccess() async {
+    setState(() => busyHistory = true);
+    try {
+      final granted = await health.requestHistoryAccess();
+      if (mounted) setState(() => history = granted);
+      if (mounted) _message(granted ? 'Historical health access enabled.' : 'Historical access was not granted.');
+    } catch (e) {
+      if (mounted) _message('Could not configure historical access: $e');
+    } finally {
+      if (mounted) setState(() => busyHistory = false);
+    }
+  }
+
+  Future<void> _backgroundAccess() async {
+    setState(() => busyBackground = true);
+    try {
+      final granted = await health.requestBackgroundAccess();
+      if (mounted) setState(() => background = granted);
+      if (mounted) _message(granted ? 'Background health read enabled.' : 'Background read was not granted.');
+    } catch (e) {
+      if (mounted) _message('Could not configure background access: $e');
+    } finally {
+      if (mounted) setState(() => busyBackground = false);
+    }
+  }
+
+  Future<void> _logout() async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Log out?'),
+        content: const Text('Health Connect permissions will remain on this device, but MyDaily sync will stop until you sign in again.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Log out')),
+        ],
+      ),
+    );
+    if (confirm != true) return;
+    try {
+      await auth.logout();
+      if (!mounted) return;
+      Navigator.pop(context);
+      widget.onLoggedOut?.call();
+    } catch (e) {
+      if (mounted) _message('Logout failed: $e');
+    }
+  }
+
+  void _message(String text) => ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    backgroundColor: const Color(0xFF06131A),
+    appBar: AppBar(
+      title: const Text('Settings'),
+      backgroundColor: Colors.transparent,
+      foregroundColor: Colors.white,
+    ),
+    body: ListView(
+      padding: const EdgeInsets.all(20),
+      children: [
+        Container(
+          padding: const EdgeInsets.all(18),
+          decoration: BoxDecoration(color: const Color(0xFF102820), borderRadius: BorderRadius.circular(18)),
+          child: const Row(children: [
+            Icon(Icons.cloud_done_rounded, color: Color(0xFF45E88F), size: 30),
+            SizedBox(width: 14),
+            Expanded(child: Text('MyDaily Health syncs your Samsung Health data through Health Connect.', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600))),
+          ]),
+        ),
+        const SizedBox(height: 22),
+        const Text('Health access', style: TextStyle(color: Colors.white, fontSize: 19, fontWeight: FontWeight.w700)),
+        const SizedBox(height: 10),
+        _permissionTile(
+          'Read health data',
+          'Steps, heart rate, sleep, calories and blood oxygen',
+          Icons.favorite_outline,
+          true,
+          null,
+        ),
+        _permissionTile(
+          'Historical health data',
+          'Allow MyDaily to read health records older than the default 30-day window.',
+          Icons.history_rounded,
+          history,
+          busyHistory ? null : _historyAccess,
+        ),
+        _permissionTile(
+          'Background read',
+          'Allow automatic health sync while MyDaily is not open.',
+          Icons.sync_rounded,
+          background,
+          busyBackground ? null : _backgroundAccess,
+        ),
+        const SizedBox(height: 22),
+        const Text('Sync', style: TextStyle(color: Colors.white, fontSize: 19, fontWeight: FontWeight.w700)),
+        const SizedBox(height: 10),
+        _infoRow('Sync frequency', 'About once per hour'),
+        _infoRow('Appwrite updates', 'Only when health values change'),
+        _infoRow('Source', 'Samsung Health via Health Connect'),
+        const SizedBox(height: 22),
+        const Text('Privacy', style: TextStyle(color: Colors.white, fontSize: 19, fontWeight: FontWeight.w700)),
+        const SizedBox(height: 10),
+        const Text('Only the daily health summary is sent to Appwrite. Raw Health Connect records remain on your device.', style: TextStyle(color: Colors.white60, height: 1.5)),
+        const SizedBox(height: 30),
+        OutlinedButton.icon(
+          style: OutlinedButton.styleFrom(foregroundColor: Colors.redAccent, side: const BorderSide(color: Colors.redAccent)),
+          onPressed: _logout,
+          icon: const Icon(Icons.logout_rounded),
+          label: const Text('Log out'),
+        ),
+      ],
+    ),
+  );
+
+  Widget _permissionTile(String title, String subtitle, IconData icon, bool enabled, VoidCallback? onPressed) => Container(
+    margin: const EdgeInsets.only(bottom: 8),
+    padding: const EdgeInsets.all(15),
+    decoration: BoxDecoration(color: const Color(0xFF0D202A), borderRadius: BorderRadius.circular(16)),
+    child: Row(children: [
+      Icon(icon, color: enabled ? const Color(0xFF45E88F) : Colors.white54),
+      const SizedBox(width: 12),
+      Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(title, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
+        const SizedBox(height: 3),
+        Text(subtitle, style: const TextStyle(color: Colors.white54, fontSize: 12)),
       ])),
-      const SizedBox(height:20),
-      const Text('Health access',style:TextStyle(color:Colors.white,fontSize:19,fontWeight:FontWeight.w700)),
-      const SizedBox(height:10),
-      _row('Read health data','Steps, heart rate, sleep, calories and oxygen',Icons.favorite_outline),
-      _row('Background read','Required for automatic background sync',Icons.sync_rounded),
-      _row('Historical read','Allows recovery of older health data',Icons.history_rounded),
-      const SizedBox(height:20),
-      const Text('Privacy',style:TextStyle(color:Colors.white,fontSize:19,fontWeight:FontWeight.w700)),
-      const SizedBox(height:10),
-      const Text('Only the daily summary is sent to Appwrite. Raw Health Connect records remain on the device.',style:TextStyle(color:Colors.white60,height:1.5)),
+      if (onPressed != null)
+        TextButton(onPressed: onPressed, child: Text(enabled ? 'Manage' : 'Enable'))
+      else
+        Icon(enabled ? Icons.check_circle_rounded : Icons.hourglass_top_rounded, color: enabled ? const Color(0xFF45E88F) : Colors.white38, size: 22),
     ]),
   );
 
-  Widget _row(String title,String subtitle,IconData icon)=>Container(
-    margin:const EdgeInsets.only(bottom:8),padding:const EdgeInsets.all(15),
-    decoration:BoxDecoration(color:const Color(0xFF0D202A),borderRadius:BorderRadius.circular(16)),
-    child:Row(children:[Icon(icon,color:const Color(0xFF45E88F)),const SizedBox(width:12),Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
-      Text(title,style:const TextStyle(color:Colors.white,fontWeight:FontWeight.w600)),
-      const SizedBox(height:3),Text(subtitle,style:const TextStyle(color:Colors.white54,fontSize:12)),
-    ]))]),
+  Widget _infoRow(String title, String value) => Container(
+    margin: const EdgeInsets.only(bottom: 8),
+    padding: const EdgeInsets.all(15),
+    decoration: BoxDecoration(color: const Color(0xFF0D202A), borderRadius: BorderRadius.circular(16)),
+    child: Row(children: [
+      Expanded(child: Text(title, style: const TextStyle(color: Colors.white70))),
+      Text(value, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
+    ]),
   );
 }
