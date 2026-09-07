@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../appwrite_health_service.dart';
 import 'health_service.dart';
+import '../auth_service.dart';
 
 class HealthScreen extends StatefulWidget {
   const HealthScreen({super.key, this.onLoggedOut});
