@@ -29,7 +29,7 @@ class _AuthGateState extends State<AuthGate> {
   @override
   Widget build(BuildContext context) {
     if (loading) return const Scaffold(body: Center(child: CircularProgressIndicator()));
-    if (signedIn) return const HealthScreen();
+    if (signedIn) return HealthScreen(onLoggedOut: () => setState(() => signedIn = false));
     return LoginScreen(onLoggedIn: () => setState(() => signedIn = true), initialError: error);
   }
 }
