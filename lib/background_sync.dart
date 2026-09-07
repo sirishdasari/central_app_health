@@ -28,6 +28,11 @@ Future<void> initializeHealthBackgroundSync() async {
     healthSyncTask,
     healthSyncTask,
     frequency: const Duration(hours: 1),
-    constraints: Constraints(networkType: NetworkType.connected),
+    constraints: Constraints(
+      networkType: NetworkType.connected,
+      requiresBatteryNotLow: true,
+    ),
+    backoffPolicy: BackoffPolicy.exponential,
+    backoffPolicyDelay: const Duration(minutes: 15),
   );
 }
