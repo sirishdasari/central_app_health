@@ -2,7 +2,7 @@ package com.example.central_app
 
 import android.os.Build
 import androidx.health.connect.client.HealthConnectClient
-import androidx.health.connect.client.aggregate.AggregateRequest
+import androidx.health.connect.client.request.AggregateRequest
 import androidx.health.connect.client.records.StepsRecord
 import androidx.health.connect.client.time.TimeRangeFilter
 import io.flutter.embedding.android.FlutterFragmentActivity
