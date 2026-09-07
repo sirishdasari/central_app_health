@@ -1,5 +1,6 @@
 import 'package:health/health.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:flutter/services.dart';
 
 class HealthSummary {
   const HealthSummary({
@@ -21,6 +22,7 @@ class HealthSummary {
 
 class HealthService {
   final Health _health = Health();
+  static const MethodChannel _nativeHealth = MethodChannel('central_app_health/health_connect');
 
   static const types = <HealthDataType>[
     HealthDataType.STEPS,
@@ -86,7 +88,27 @@ class HealthService {
     // evening. Read a wider window so last night's sleep is included.
     final sleepStart = dayStart.subtract(const Duration(hours: 12));
 
-    final steps = await _health.getTotalStepsInInterval(dayStart, now) ?? 0;
+    var steps = await _health.getTotalStepsInInterval(dayStart, now) ?? 0;
+
+    // On Android 14+, use Health Connect's native aggregate API for steps.
+    // This is important for the June 2026 on-device step attribution change:
+    // aggregate() automatically includes device steps when no DataOrigin filter
+    // is supplied. The Flutter plugin version pinned for Flutter 3.27 uses an
+    // older Health Connect client, so prefer the native client here.
+    try {
+      final nativeSteps = await _nativeHealth.invokeMethod<int>(
+        'getAggregatedSteps',
+        {
+          'startMillis': dayStart.millisecondsSinceEpoch,
+          'endMillis': now.millisecondsSinceEpoch,
+        },
+      );
+      if (nativeSteps != null) {
+        steps = nativeSteps;
+      }
+    } on PlatformException {
+      // Fall back to the Flutter health plugin if native aggregation is unavailable.
+    }
 
     final data = await _health.getHealthDataFromTypes(
       startTime: sleepStart,
