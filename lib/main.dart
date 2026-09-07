@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'background_sync.dart';
-import 'health/health_screen.dart';
+import 'auth_screen.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -18,7 +18,7 @@ class MyApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       title: 'MyDaily Health',
       theme: ThemeData.dark(useMaterial3: true),
-      home: const HealthScreen(),
+      home: const AuthGate(),
     );
   }
 }
