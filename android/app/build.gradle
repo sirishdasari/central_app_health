@@ -43,7 +43,3 @@ flutter {
     source = "../.."
 }
 
-// Direct Health Connect client for accurate native aggregation (matches health 13.1.x).
-dependencies {
-    implementation "androidx.health.connect:connect-client:1.1.0-alpha11"
-}
