@@ -17,25 +17,49 @@ class HealthService {
   // Health Connect data origin for Samsung Health.
   static const String _samsungHealthSourceId = 'com.sec.android.app.shealth';
 
+  static const List<HealthDataType> _types = [
+    HealthDataType.STEPS,
+    HealthDataType.HEART_RATE,
+    HealthDataType.SLEEP_ASLEEP,
+    HealthDataType.ACTIVE_ENERGY_BURNED,
+    HealthDataType.TOTAL_CALORIES_BURNED,
+    HealthDataType.BLOOD_OXYGEN,
+  ];
+
   Future<bool> requestPermissions() async {
-    final types = <HealthDataType>[
-      HealthDataType.STEPS,
-      HealthDataType.HEART_RATE,
-      HealthDataType.SLEEP_ASLEEP,
-      HealthDataType.ACTIVE_ENERGY_BURNED,
-      HealthDataType.TOTAL_CALORIES_BURNED,
-      HealthDataType.BLOOD_OXYGEN,
-    ];
     try {
       await _health.configure();
-      return await _health.requestAuthorization(types);
+      final granted = await _health.requestAuthorization(_types);
+      if (!granted) return false;
+
+      if (await _health.isHealthDataInBackgroundAvailable()) {
+        await _health.requestHealthDataInBackgroundAuthorization();
+      }
+      return true;
     } catch (e) {
       print('Health permission error: $e');
       return false;
     }
   }
 
-  Future<bool> ensurePermissions() => requestPermissions();
+  Future<bool> ensurePermissions() async {
+    try {
+      await _health.configure();
+      final granted = await _health.hasPermissions(
+        _types,
+        permissions: _types.map((_) => HealthDataAccess.READ).toList(),
+      );
+      if (granted != true) return false;
+
+      if (await _health.isHealthDataInBackgroundAvailable()) {
+        return await _health.isHealthDataInBackgroundAuthorized();
+      }
+      return true;
+    } catch (e) {
+      print('Background health permission check error: $e');
+      return false;
+    }
+  }
 
   Future<List<HealthDataPoint>> getTodayHealthData() async {
     final now = DateTime.now();
