@@ -60,7 +60,9 @@ class HealthService {
         final sourceId = point.sourceId.toLowerCase();
         final sourceName = point.sourceName.toLowerCase();
         return sourceId == _samsungHealthSourceId ||
-            sourceName == 'samsung health';
+            sourceName.contains('samsung health') ||
+            sourceName.contains('s health') ||
+            sourceName.contains('com.sec.android.app.shealth');
       }).toList();
     } catch (e) {
       print('Health data error: $e');
