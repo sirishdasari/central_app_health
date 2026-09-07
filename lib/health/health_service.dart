@@ -61,6 +61,28 @@ class HealthService {
     }
   }
 
+  Future<bool> isHistoryAuthorized() async {
+    await _health.configure();
+    return await _health.isHealthDataHistoryAuthorized();
+  }
+
+  Future<bool> requestHistoryAccess() async {
+    await _health.configure();
+    return await _health.requestHealthDataHistoryAuthorization();
+  }
+
+  Future<bool> isBackgroundAuthorized() async {
+    await _health.configure();
+    if (!await _health.isHealthDataInBackgroundAvailable()) return false;
+    return await _health.isHealthDataInBackgroundAuthorized();
+  }
+
+  Future<bool> requestBackgroundAccess() async {
+    await _health.configure();
+    if (!await _health.isHealthDataInBackgroundAvailable()) return false;
+    return await _health.requestHealthDataInBackgroundAuthorization();
+  }
+
   Future<List<HealthDataPoint>> getTodayHealthData() async {
     final now = DateTime.now();
     final start = DateTime(now.year, now.month, now.day);
