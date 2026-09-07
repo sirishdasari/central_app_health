@@ -14,6 +14,9 @@ class HealthSummary {
 class HealthService {
   final Health _health = Health();
 
+  // Health Connect data origin for Samsung Health.
+  static const String _samsungHealthSourceId = 'com.sec.android.app.shealth';
+
   Future<bool> requestPermissions() async {
     final types = <HealthDataType>[
       HealthDataType.STEPS,
