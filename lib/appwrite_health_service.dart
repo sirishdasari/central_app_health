@@ -55,6 +55,16 @@ class AppwriteHealthService {
         permissions: permissions,
       );
     } else {
+      final existingData = existing.documents.first.data;
+      final unchanged =
+          existingData['steps'] == summary.steps &&
+          existingData['heartRateAvg'] == summary.heartRateAvg &&
+          existingData['sleepMinutes'] == summary.sleepMinutes &&
+          existingData['activeCalories'] == summary.activeCalories &&
+          existingData['bloodOxygenAvg'] == summary.bloodOxygenAvg;
+
+      if (unchanged) return;
+
       await _databases.updateDocument(
         databaseId: AppwriteConfig.databaseId,
         collectionId: AppwriteConfig.activitiesCollectionId,
