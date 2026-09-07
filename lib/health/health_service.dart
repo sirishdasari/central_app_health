@@ -47,7 +47,21 @@ class HealthService {
       HealthDataType.BLOOD_OXYGEN,
     ];
     try {
-      return await _health.getHealthDataFromTypes(startTime: start, endTime: now, types: types);
+      final data = await _health.getHealthDataFromTypes(
+        startTime: start,
+        endTime: now,
+        types: types,
+      );
+
+      // Health Connect is a hub. Only use records whose origin is Samsung Health.
+      // Samsung Health normally reports this as sourceId com.sec.android.app.shealth
+      // and/or sourceName "Samsung Health".
+      return data.where((point) {
+        final sourceId = point.sourceId.toLowerCase();
+        final sourceName = point.sourceName.toLowerCase();
+        return sourceId == _samsungHealthSourceId ||
+            sourceName == 'samsung health';
+      }).toList();
     } catch (e) {
       print('Health data error: $e');
       return [];
