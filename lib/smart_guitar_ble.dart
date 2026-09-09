@@ -43,15 +43,22 @@ class SmartGuitarBle {
 
   Future<void> disconnect() async { final d=device; if(d!=null) await d.disconnect(); device=null;control=null;data=null;_status.add('disconnected'); }
 
-  Future<String> requestTasks() async {
+  Future<String> requestTasks() => _request('GET_TASKS');
+
+  Future<Map<String,dynamic>> getProgress() async {
+    final raw = await _request('GET_PROGRESS');
+    return Map<String,dynamic>.from(jsonDecode(raw));
+  }
+
+  Future<String> _request(String command) async {
     final c=data; final w=control;
-    if(c==null||w==null)throw Exception('Smart Guitar is not connected');
+    if(c==null||w==null) throw Exception('Smart Guitar is not connected');
     final done=Completer<String>(); final buffer=StringBuffer();
     late StreamSubscription<List<int>> sub;
-    sub=c.onValueReceived.listen((bytes){final s=utf8.decode(bytes,allowMalformed:true);if(s=='\n'){if(!done.isCompleted)done.complete(buffer.toString());}else buffer.write(s);});
-    await w.write(utf8.encode('GET_TASKS'),withoutResponse:false);
-    final result=await done.future.timeout(const Duration(seconds:5));
-    await sub.cancel(); return result;
+    sub=c.onValueReceived.listen((bytes){final s=utf8.decode(bytes,allowMalformed:true); if(s=='\\n'){if(!done.isCompleted)done.complete(buffer.toString());}else{buffer.write(s);}});
+    await w.write(utf8.encode(command),withoutResponse:false);
+    try { return await done.future.timeout(const Duration(seconds:8)); }
+    finally { await sub.cancel(); }
   }
 
   Future<void> syncTasks(Map<String,dynamic> apiPayload) async {
