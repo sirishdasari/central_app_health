@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 class SmartGuitarBle {
   static final SmartGuitarBle instance=SmartGuitarBle._();
@@ -19,6 +20,8 @@ class SmartGuitarBle {
   bool get connected=>device?.isConnected==true;
 
   Future<List<ScanResult>> scan({Duration timeout=const Duration(seconds:5)}) async {
+    final permissions = await [Permission.bluetoothScan, Permission.bluetoothConnect].request();
+    if (permissions.values.any((p)=>!p.isGranted)) throw Exception('Bluetooth permission was not granted');
     final results=<ScanResult>[];
     final sub=FlutterBluePlus.onScanResults.listen((items){for(final r in items){if(r.device.platformName=='Smart Guitar'||r.advertisementData.advName=='Smart Guitar'){results.removeWhere((x)=>x.device.remoteId==r.device.remoteId);results.add(r);}}});
     await FlutterBluePlus.startScan(timeout:timeout,withServices:[serviceUuid]);
