@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../appwrite_health_service.dart';
 import 'health_service.dart';
 import '../auth_service.dart';
+import '../guitar_practice_screen.dart';
 import '../guitar_tuner.dart';
 
 class HealthScreen extends StatefulWidget {
@@ -104,6 +105,7 @@ class _HealthScreenState extends State<HealthScreen> {
         index: _tab,
         children: [
           _healthView(context),
+          const GuitarPracticeScreen(),
           const GuitarTunerSheet(embedded: true),
           SyncSettingsScreen(onLoggedOut: widget.onLoggedOut),
         ],
@@ -118,6 +120,11 @@ class _HealthScreenState extends State<HealthScreen> {
             icon: Icon(Icons.favorite_outline_rounded),
             selectedIcon: Icon(Icons.favorite_rounded),
             label: 'Health',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.library_music_outlined),
+            selectedIcon: Icon(Icons.library_music_rounded),
+            label: 'Practice',
           ),
           NavigationDestination(
             icon: Icon(Icons.tune_rounded),
