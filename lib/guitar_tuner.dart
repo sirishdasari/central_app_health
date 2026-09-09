@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:math' as math;
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
+import 'package:audioplayers/audioplayers.dart';
 import 'package:record/record.dart';
 
 class GuitarTunerSheet extends StatefulWidget {
@@ -20,6 +20,7 @@ class _GuitarTunerSheetState extends State<GuitarTunerSheet> {
   ];
 
   final recorder = AudioRecorder();
+  final AudioPlayer _tuningSound = AudioPlayer();
   StreamSubscription<Uint8List>? sub;
   final samples = <int>[];
   bool running = false;
@@ -28,7 +29,7 @@ class _GuitarTunerSheetState extends State<GuitarTunerSheet> {
   double hz = 0, cents = 0, confidence = 0;
 
   @override void initState() { super.initState(); start(); }
-  @override void dispose() { stop(); recorder.dispose(); super.dispose(); }
+  @override void dispose() { stop(); recorder.dispose(); _tuningSound.dispose(); super.dispose(); }
 
   Future<void> start() async {
     try {
@@ -55,6 +56,57 @@ class _GuitarTunerSheetState extends State<GuitarTunerSheet> {
     if (mounted) setState(() => running = false);
   }
 
+  Future<void> _playInTuneSound() async {
+    try {
+      await _tuningSound.stop();
+      await _tuningSound.play(
+        BytesSource(_buildInTuneWav(), mimeType: 'audio/wav'),
+        volume: 0.65,
+        mode: PlayerMode.lowLatency,
+      );
+    } catch (_) {
+      // Tuning must continue even if the confirmation sound cannot play.
+    }
+  }
+
+  Uint8List _buildInTuneWav() {
+    const sampleRate = 44100;
+    const seconds = 0.34;
+    final count = (sampleRate * seconds).round();
+    final data = ByteData(44 + count * 2);
+    void putString(int offset, String value) {
+      for (var i = 0; i < value.length; i++) {
+        data.setUint8(offset + i, value.codeUnitAt(i));
+      }
+    }
+
+    putString(0, 'RIFF');
+    data.setUint32(4, 36 + count * 2, Endian.little);
+    putString(8, 'WAVE');
+    putString(12, 'fmt ');
+    data.setUint32(16, 16, Endian.little);
+    data.setUint16(20, 1, Endian.little);
+    data.setUint16(22, 1, Endian.little);
+    data.setUint32(24, sampleRate, Endian.little);
+    data.setUint32(28, sampleRate * 2, Endian.little);
+    data.setUint16(32, 2, Endian.little);
+    data.setUint16(34, 16, Endian.little);
+    putString(36, 'data');
+    data.setUint32(40, count * 2, Endian.little);
+
+    for (var i = 0; i < count; i++) {
+      final time = i / sampleRate;
+      final freq = time < 0.17 ? 659.25 : 987.77;
+      final local = time < 0.17 ? time : time - 0.17;
+      final attack = (local / 0.018).clamp(0.0, 1.0);
+      final release = ((0.16 - local) / 0.045).clamp(0.0, 1.0);
+      final envelope = attack * release;
+      final sample = math.sin(2 * math.pi * freq * time) * envelope * 0.42;
+      data.setInt16(44 + i * 2, (sample * 32767).round(), Endian.little);
+    }
+    return data.buffer.asUint8List();
+  }
+
   void onAudio(Uint8List bytes) {
     for (var i = 0; i + 1 < bytes.length; i += 2) {
       final v = bytes[i] | (bytes[i + 1] << 8);
@@ -73,7 +125,7 @@ class _GuitarTunerSheetState extends State<GuitarTunerSheet> {
 
     if (ok && !_inTuneSoundPlayed) {
       _inTuneSoundPlayed = true;
-      SystemSound.play(SystemSoundType.click);
+      unawaited(_playInTuneSound());
     } else if (!ok) {
       _inTuneSoundPlayed = false;
     }
