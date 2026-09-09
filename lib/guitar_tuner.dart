@@ -6,7 +6,8 @@ import 'package:audioplayers/audioplayers.dart';
 import 'package:record/record.dart';
 
 class GuitarTunerSheet extends StatefulWidget {
-  const GuitarTunerSheet({super.key});
+  const GuitarTunerSheet({super.key, this.embedded = false});
+  final bool embedded;
   @override State<GuitarTunerSheet> createState() => _GuitarTunerSheetState();
 }
 
@@ -197,15 +198,17 @@ class _GuitarTunerSheetState extends State<GuitarTunerSheet> {
   @override Widget build(BuildContext context) {
     return Material(
       color: const Color(0xFF06131A),
-      borderRadius: const BorderRadius.vertical(top: Radius.circular(30)),
+      borderRadius: embedded ? BorderRadius.zero : const BorderRadius.vertical(top: Radius.circular(30)),
       clipBehavior: Clip.antiAlias,
       child: SafeArea(
         child: SingleChildScrollView(
           padding: const EdgeInsets.fromLTRB(22, 10, 22, 20),
           child: Column(children: [
-            Container(width: 46, height: 4, decoration: BoxDecoration(
-              color: Colors.white24, borderRadius: BorderRadius.circular(4))),
-            const SizedBox(height: 14),
+            if (!widget.embedded) ...[
+              Container(width: 46, height: 4, decoration: BoxDecoration(
+                color: Colors.white24, borderRadius: BorderRadius.circular(4))),
+              const SizedBox(height: 14),
+            ],
             Row(children: [
               const Expanded(child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -221,9 +224,10 @@ class _GuitarTunerSheetState extends State<GuitarTunerSheet> {
                 onPressed: running ? stop : start,
                 icon: Icon(running ? Icons.mic_rounded : Icons.mic_off_rounded,
                   color: running ? accent : Colors.white54)),
-              IconButton(
-                onPressed: () => Navigator.pop(context),
-                icon: const Icon(Icons.close_rounded, color: Colors.white70)),
+              if (!widget.embedded)
+                IconButton(
+                  onPressed: () => Navigator.pop(context),
+                  icon: const Icon(Icons.close_rounded, color: Colors.white70)),
             ]),
             const SizedBox(height: 10),
 
