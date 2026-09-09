@@ -25,6 +25,7 @@ class _GuitarTunerSheetState extends State<GuitarTunerSheet> {
   final samples = <int>[];
   bool running = false;
   bool _inTuneSoundPlayed = false;
+  final Set<String> _tunedStrings = <String>{};
   String note = '--', stringName = 'Play a string';
   double hz = 0, cents = 0, confidence = 0;
 
@@ -123,9 +124,12 @@ class _GuitarTunerSheetState extends State<GuitarTunerSheet> {
     final c = rawCents.clamp(-50.0, 50.0).toDouble();
     final ok = c.abs() <= tolerance && p.c >= .60;
 
-    if (ok && !_inTuneSoundPlayed) {
-      _inTuneSoundPlayed = true;
-      unawaited(_playInTuneSound());
+    if (ok) {
+      _tunedStrings.add(target.stringName);
+      if (!_inTuneSoundPlayed) {
+        _inTuneSoundPlayed = true;
+        unawaited(_playInTuneSound());
+      }
     } else if (!ok) {
       _inTuneSoundPlayed = false;
     }
@@ -265,7 +269,7 @@ class _GuitarTunerSheetState extends State<GuitarTunerSheet> {
                 border: Border.all(color: inTune ? accent : Colors.white10),
               ),
               child: Text(
-                inTune ? '✓ Within tolerance  ±5 cents' : 'Green zone = ±5 cents',
+                inTune ? '✓ Within tolerance  ±5 cents' : 'Tune to the green center',
                 style: TextStyle(color: inTune ? accent : Colors.white54,
                   fontWeight: FontWeight.w700, fontSize: 13)),
             ),
@@ -274,62 +278,73 @@ class _GuitarTunerSheetState extends State<GuitarTunerSheet> {
             Row(mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: notes.map((n) {
                 final selected = n.name == note && n.stringName == stringName;
+                final tuned = _tunedStrings.contains(n.stringName);
+
                 return AnimatedContainer(
-                  duration: const Duration(milliseconds: 180),
+                  duration: const Duration(milliseconds: 220),
+                  curve: Curves.easeOutBack,
                   width: 47, height: 58,
                   decoration: BoxDecoration(
-                    color: selected ? const Color(0xFF123B2A) : const Color(0xFF0D202A),
+                    color: tuned
+                        ? const Color(0xFF123B2A)
+                        : selected
+                            ? const Color(0xFF10242E)
+                            : const Color(0xFF0D202A),
                     borderRadius: BorderRadius.circular(14),
-                    border: Border.all(color: selected ? accent : Colors.white10,
-                      width: selected ? 1.5 : 1)),
-                  child: Column(mainAxisAlignment: MainAxisAlignment.center,
+                    border: Border.all(
+                      color: tuned || selected ? accent : Colors.white10,
+                      width: tuned || selected ? 1.5 : 1),
+                    boxShadow: tuned ? [
+                      BoxShadow(color: accent.withOpacity(.16), blurRadius: 12)
+                    ] : null,
+                  ),
+                  child: Stack(
+                    clipBehavior: Clip.none,
                     children: [
-                      Text(n.name, style: TextStyle(color: selected ? accent : Colors.white70,
-                        fontSize: 20, fontWeight: FontWeight.w800)),
-                      Text(n.number, style: const TextStyle(color: Colors.white30, fontSize: 11)),
-                    ]),
+                      Center(
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Text(n.name, style: TextStyle(
+                              color: tuned || selected ? accent : Colors.white70,
+                              fontSize: 20, fontWeight: FontWeight.w800)),
+                            Text(n.number, style: TextStyle(
+                              color: tuned ? Colors.white54 : Colors.white30,
+                              fontSize: 11)),
+                          ],
+                        ),
+                      ),
+                      if (tuned)
+                        Positioned(
+                          top: -9,
+                          right: -5,
+                          child: Container(
+                            width: 20,
+                            height: 20,
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF25E88A),
+                              shape: BoxShape.circle,
+                              boxShadow: [
+                                BoxShadow(
+                                  color: const Color(0xFF25E88A).withOpacity(.35),
+                                  blurRadius: 8,
+                                ),
+                              ],
+                            ),
+                            child: const Icon(
+                              Icons.check_rounded,
+                              color: Color(0xFF06131A),
+                              size: 14,
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
                 );
               }).toList()),
-
-            const SizedBox(height: 12),
-            Row(children: [
-              Expanded(child: _InfoTile(Icons.music_note_rounded, 'Standard', 'E A D G B E')),
-              const SizedBox(width: 10),
-              Expanded(child: _InfoTile(Icons.graphic_eq_rounded, 'Microphone',
-                running ? 'Listening' : 'Paused', running)),
-            ]),
-            const SizedBox(height: 12),
-            const Row(children: [
-              Icon(Icons.info_outline_rounded, color: Colors.white38, size: 19),
-              SizedBox(width: 9),
-              Expanded(child: Text(
-                'Tune until the needle reaches the green center zone. '
-                'A sound plays once when the string is in tune.',
-                style: TextStyle(color: Colors.white54, fontSize: 12.5, height: 1.35))),
-            ]),
           ]),
         ),
       ),
-    );
-  }
-}
-
-class _InfoTile extends StatelessWidget {
-  const _InfoTile(this.icon, this.title, this.subtitle, [this.active = false]);
-  final IconData icon; final String title, subtitle; final bool active;
-  @override Widget build(BuildContext context) {
-    final c = active ? const Color(0xFF25E88A) : Colors.white54;
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(color: const Color(0xFF0D202A),
-        borderRadius: BorderRadius.circular(15), border: Border.all(color: Colors.white10)),
-      child: Row(children: [
-        Icon(icon, color: c, size: 21), const SizedBox(width: 9),
-        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(title, style: const TextStyle(color: Colors.white70, fontWeight: FontWeight.w700)),
-          Text(subtitle, style: const TextStyle(color: Colors.white38, fontSize: 11)),
-        ])),
-      ]),
     );
   }
 }
