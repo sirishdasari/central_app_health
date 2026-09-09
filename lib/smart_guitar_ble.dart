@@ -54,44 +54,64 @@ class SmartGuitarBle {
 
     late final StreamSubscription<List<ScanResult>> sub;
     sub = FlutterBluePlus.onScanResults.listen((items) {
-      for (final r in items) {
-        final advertisedName = r.advertisementData.advName.trim();
-        final platformName = r.device.platformName.trim();
-
-        final hasName = advertisedName == 'Smart Guitar' ||
-            platformName == 'Smart Guitar';
-
-        final hasService = r.advertisementData.serviceUuids.any(
-          (uuid) => uuid == serviceUuid,
-        );
-
-        // The ESP32 puts its name in the scan response and also advertises
-        // the service UUID. Accept either signal so Android devices that
-        // expose only one part of the advertisement can still find it.
-        if (hasName || hasService) {
-          results[r.device.remoteId.str] = r;
-        }
+      for (final item in items) {
+        results[item.device.remoteId.str] = item;
       }
-    });
+    }, onError: (_) {});
 
     try {
-      // IMPORTANT: do not use withServices here.
-      // Some Android phones do not expose the service UUID/name in the
-      // first advertising packet, so the previous filtered scan could
-      // incorrectly report "Smart Guitar not found".
-      await FlutterBluePlus.startScan(timeout: timeout);
-
-      if (await FlutterBluePlus.isScanning.first) {
-        await FlutterBluePlus.isScanning.where((v) => !v).first;
-      }
+      // Unfiltered scan. We identify the guitar by its advertised name,
+      // then verify the custom GATT service after connecting.
+      await FlutterBluePlus.startScan(
+        timeout: timeout,
+        androidScanMode: AndroidScanMode.lowLatency,
+        androidCheckLocationServices: false,
+      );
+      await FlutterBluePlus.isScanning.where((v) => !v).first;
     } finally {
       await sub.cancel();
-      if (await FlutterBluePlus.isScanning.first) {
+      if (FlutterBluePlus.isScanningNow) {
         await FlutterBluePlus.stopScan();
       }
     }
 
-    return results.values.toList();
+    // Include anything retained by FlutterBluePlus after the scan.
+    for (final item in FlutterBluePlus.lastScanResults) {
+      results[item.device.remoteId.str] = item;
+    }
+
+    final matches = results.values.where(_isSmartGuitar).toList();
+    if (matches.isEmpty) {
+      final seen = results.values.map((item) {
+        final adv = item.advertisementData.advName.trim();
+        final platform = item.device.platformName.trim();
+        final name = adv.isNotEmpty ? adv : platform;
+        return name.isEmpty
+            ? '${item.device.remoteId.str} (unnamed)'
+            : '$name (${item.device.remoteId.str})';
+      }).take(12).join(', ');
+
+      throw Exception(
+        seen.isEmpty
+            ? 'No BLE devices were detected. Check that BLE is enabled on the guitar and try again.'
+            : 'Smart Guitar was not detected. BLE devices seen: $seen',
+      );
+    }
+
+    return matches;
+  }
+
+  bool _isSmartGuitar(ScanResult item) {
+    final advName = item.advertisementData.advName.trim().toLowerCase();
+    final platformName = item.device.platformName.trim().toLowerCase();
+
+    return advName == 'smart guitar' ||
+        platformName == 'smart guitar' ||
+        advName.contains('smart guitar') ||
+        platformName.contains('smart guitar') ||
+        item.advertisementData.serviceUuids.any(
+          (uuid) => uuid == serviceUuid,
+        );
   }
 
   Future<void> connect(BluetoothDevice d) async {
