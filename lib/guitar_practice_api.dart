@@ -23,12 +23,9 @@ class GuitarPractice {
 
   factory GuitarPractice.fromDocument(Document document) {
     final data = document.data;
-
     return GuitarPractice(
       id: document.$id,
-      title: data['sessionName']?.toString() ??
-          data['title']?.toString() ??
-          '',
+      title: data['sessionName']?.toString() ?? data['title']?.toString() ?? '',
       completed: data['completed'] == true,
       suggestedTime: data['suggestedTime']?.toString() ?? '',
       duration: (data['duration'] as num?)?.toInt() ?? 0,
@@ -50,10 +47,6 @@ class GuitarPracticeResponse {
   final List<GuitarPractice> practices;
 }
 
-/// Direct Appwrite Cloud access for the hardcoded guitarPractice collection.
-///
-/// This intentionally uses the Databases API so it works with appwrite
-/// Flutter SDK 17.1.0. TablesDB requires SDK 18+.
 class GuitarPracticeApi {
   static const String collectionId = 'guitarPractice';
 
@@ -65,12 +58,8 @@ class GuitarPracticeApi {
 
   void _validateConfig() {
     if (AppwriteConfig.projectId.isEmpty) {
-      throw Exception(
-        'APPWRITE_PROJECT_ID is not configured. '
-        'Run Flutter with --dart-define=APPWRITE_PROJECT_ID=...',
-      );
+      throw Exception('APPWRITE_PROJECT_ID is not configured');
     }
-
     if (AppwriteConfig.databaseId.isEmpty) {
       throw Exception('APPWRITE_DATABASE_ID is not configured');
     }
@@ -79,17 +68,18 @@ class GuitarPracticeApi {
   Future<GuitarPracticeResponse> list() async {
     _validateConfig();
 
+    // Appwrite 17.1 Databases API uses the system attribute
+    // literally as '$createdAt'. Do NOT escape the '$' in a raw string.
     final result = await _databases.listDocuments(
       databaseId: AppwriteConfig.databaseId,
       collectionId: collectionId,
       queries: [
-        Query.orderDesc(r'\$createdAt'),
+        Query.orderDesc(r'$createdAt'),
         Query.limit(100),
       ],
     );
 
     final documents = result.documents;
-
     if (documents.isEmpty) {
       return GuitarPracticeResponse(
         date: _dateString(DateTime.now()),
@@ -108,19 +98,17 @@ class GuitarPracticeApi {
       final parsed = DateTime.tryParse(createdAt);
       if (parsed == null) continue;
 
-      dated.add(
-        _DatedDocument(
-          document: document,
-          date: _dateString(parsed.toLocal()),
-          createdAt: parsed,
-        ),
-      );
+      dated.add(_DatedDocument(
+        document: document,
+        date: _dateString(parsed.toLocal()),
+        createdAt: parsed,
+      ));
     }
 
     if (dated.isEmpty) {
-      final practices =
-          documents.map(GuitarPractice.fromDocument).toList(growable: false);
-
+      final practices = documents
+          .map(GuitarPractice.fromDocument)
+          .toList(growable: false);
       return GuitarPracticeResponse(
         date: today,
         dailyPracticeTime:
@@ -130,16 +118,13 @@ class GuitarPracticeApi {
     }
 
     final hasToday = dated.any((item) => item.date == today);
-
     final selectedDate = hasToday
         ? today
         : dated.map((item) => item.date).reduce(
             (a, b) => a.compareTo(b) > 0 ? a : b,
           );
 
-    final selected = dated
-        .where((item) => item.date == selectedDate)
-        .toList()
+    final selected = dated.where((item) => item.date == selectedDate).toList()
       ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
 
     final practices = selected
@@ -156,7 +141,6 @@ class GuitarPracticeApi {
 
   Future<void> create(Map<String, dynamic> value) async {
     _validateConfig();
-
     await _databases.createDocument(
       databaseId: AppwriteConfig.databaseId,
       collectionId: collectionId,
@@ -167,10 +151,7 @@ class GuitarPracticeApi {
 
   Future<void> update(String id, Map<String, dynamic> value) async {
     _validateConfig();
-
-    if (id.trim().isEmpty) {
-      throw Exception('Practice id is empty');
-    }
+    if (id.trim().isEmpty) throw Exception('Practice id is empty');
 
     final data = _toAppwriteData(value);
     if (data.isEmpty) return;
@@ -185,10 +166,7 @@ class GuitarPracticeApi {
 
   Future<void> delete(String id) async {
     _validateConfig();
-
-    if (id.trim().isEmpty) {
-      throw Exception('Practice id is empty');
-    }
+    if (id.trim().isEmpty) throw Exception('Practice id is empty');
 
     await _databases.deleteDocument(
       databaseId: AppwriteConfig.databaseId,
@@ -203,31 +181,22 @@ class GuitarPracticeApi {
     if (value.containsKey('title')) {
       data['sessionName'] = value['title']?.toString() ?? '';
     }
-
     if (value.containsKey('completed')) {
       data['completed'] = value['completed'] == true;
     }
-
     if (value.containsKey('suggestedTime')) {
       data['suggestedTime'] = value['suggestedTime']?.toString() ?? '';
     }
-
     if (value.containsKey('duration')) {
       final duration = value['duration'];
-      if (duration is num) {
-        data['duration'] = duration.toInt();
-      }
+      if (duration is num) data['duration'] = duration.toInt();
     }
-
     if (value.containsKey('description')) {
       data['description'] = value['description']?.toString() ?? '';
     }
-
     if (value.containsKey('dailyPracticeTime')) {
       final practiceTime = value['dailyPracticeTime'];
-      if (practiceTime is num) {
-        data['dailyPracticeTime'] = practiceTime.toInt();
-      }
+      if (practiceTime is num) data['dailyPracticeTime'] = practiceTime.toInt();
     }
 
     return data;
