@@ -1,4 +1,5 @@
 import 'package:appwrite/appwrite.dart';
+import 'package:appwrite/models.dart';
 import 'appwrite_config.dart';
 
 class AppwriteAuthService {
