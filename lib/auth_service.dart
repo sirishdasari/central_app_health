@@ -24,8 +24,8 @@ class AppwriteAuthService {
     if (AppwriteConfig.projectId.isEmpty) {
       throw Exception('APPWRITE_PROJECT_ID is not configured');
     }
-    await _account.createEmailSession(email: email.trim(), password: password);
-    return _account.get();
+    await _account.createEmailPasswordSession(email: email.trim(), password: password);
+    return await _account.get();
   }
 
   Future<void> logout() async {
