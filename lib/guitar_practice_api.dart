@@ -31,8 +31,7 @@ class GuitarPractice {
       suggestedTime: data['suggestedTime']?.toString() ?? '',
       duration: (data['duration'] as num?)?.toInt() ?? 0,
       description: data['description']?.toString() ?? '',
-      dailyPracticeTime:
-          (data['dailyPracticeTime'] as num?)?.toInt() ?? 0,
+      dailyPracticeTime: (data['dailyPracticeTime'] as num?)?.toInt() ?? 0,
     );
   }
 }
@@ -49,11 +48,7 @@ class GuitarPracticeResponse {
   final List<GuitarPractice> practices;
 }
 
-/// Direct Appwrite Cloud access for the guitarPractice table.
-///
-/// The table ID is intentionally hardcoded as requested.
-/// Define the Appwrite endpoint, project ID and database ID through
-/// AppwriteConfig / --dart-define.
+/// Direct Appwrite Cloud access for the hardcoded guitarPractice table.
 class GuitarPracticeApi {
   static const String tableId = 'guitarPractice';
 
@@ -79,7 +74,7 @@ class GuitarPracticeApi {
       databaseId: AppwriteConfig.databaseId,
       tableId: tableId,
       queries: [
-        Query.orderDesc('\$createdAt'),
+        Query.orderDesc(r'\$createdAt'),
         Query.limit(100),
       ],
       total: false,
@@ -94,14 +89,11 @@ class GuitarPracticeApi {
       );
     }
 
-    // Keep the same behaviour as the existing Python endpoint:
-    // use today's rows when available; otherwise use the newest
-    // practice date in the table.
     final localToday = _dateString(DateTime.now());
-
     final datedRows = <_DatedRow>[];
+
     for (final row in rows) {
-      final createdAt = row.\$createdAt;
+      final createdAt = row.$createdAt;
       if (createdAt.isEmpty) continue;
 
       final parsed = DateTime.tryParse(createdAt);
@@ -192,12 +184,6 @@ class GuitarPracticeApi {
     );
   }
 
-  /// Converts the public app model names to the actual guitarPractice
-  /// table column names. Unknown fields are intentionally ignored.
-  ///
-  /// This is important for Bluetooth progress payloads: fields such as
-  /// practicedSeconds are not sent to Appwrite unless they are explicitly
-  /// represented by a guitarPractice column.
   Map<String, dynamic> _toAppwriteData(Map<String, dynamic> value) {
     final data = <String, dynamic>{};
 
