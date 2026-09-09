@@ -68,18 +68,32 @@ class GuitarPracticeApi {
   Future<GuitarPracticeResponse> list() async {
     _validateConfig();
 
-    // Appwrite 17.1 Databases API uses the system attribute
-    // literally as '$createdAt'. Do NOT escape the '$' in a raw string.
-    final result = await _databases.listDocuments(
-      databaseId: AppwriteConfig.databaseId,
-      collectionId: collectionId,
-      queries: [
-        Query.orderDesc(r'$createdAt'),
-        Query.limit(100),
-      ],
-    );
+    // Do not filter tasks by their creation date. A guitar practice task
+    // remains visible regardless of when it was created.
+    //
+    // Appwrite limits a single query page, so fetch all pages in batches of
+    // 100. This keeps the phone screen in sync even when there are many tasks.
+    const pageSize = 100;
+    final documents = <Document>[];
+    var offset = 0;
 
-    final documents = result.documents;
+    while (true) {
+      final result = await _databases.listDocuments(
+        databaseId: AppwriteConfig.databaseId,
+        collectionId: collectionId,
+        queries: [
+          Query.orderDesc(r'\$createdAt'),
+          Query.limit(pageSize),
+          Query.offset(offset),
+        ],
+      );
+
+      documents.addAll(result.documents);
+
+      if (result.documents.length < pageSize) break;
+      offset += pageSize;
+    }
+
     if (documents.isEmpty) {
       return GuitarPracticeResponse(
         date: _dateString(DateTime.now()),
@@ -88,53 +102,13 @@ class GuitarPracticeApi {
       );
     }
 
-    final today = _dateString(DateTime.now());
-    final dated = <_DatedDocument>[];
-
-    for (final document in documents) {
-      final createdAt = document.$createdAt;
-      if (createdAt.isEmpty) continue;
-
-      final parsed = DateTime.tryParse(createdAt);
-      if (parsed == null) continue;
-
-      dated.add(_DatedDocument(
-        document: document,
-        date: _dateString(parsed.toLocal()),
-        createdAt: parsed,
-      ));
-    }
-
-    if (dated.isEmpty) {
-      final practices = documents
-          .map(GuitarPractice.fromDocument)
-          .toList(growable: false);
-      return GuitarPracticeResponse(
-        date: today,
-        dailyPracticeTime:
-            practices.isEmpty ? 0 : practices.first.dailyPracticeTime,
-        practices: practices,
-      );
-    }
-
-    final hasToday = dated.any((item) => item.date == today);
-    final selectedDate = hasToday
-        ? today
-        : dated.map((item) => item.date).reduce(
-            (a, b) => a.compareTo(b) > 0 ? a : b,
-          );
-
-    final selected = dated.where((item) => item.date == selectedDate).toList()
-      ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
-
-    final practices = selected
-        .map((item) => GuitarPractice.fromDocument(item.document))
+    final practices = documents
+        .map(GuitarPractice.fromDocument)
         .toList(growable: false);
 
     return GuitarPracticeResponse(
-      date: selectedDate,
-      dailyPracticeTime:
-          practices.isEmpty ? 0 : practices.first.dailyPracticeTime,
+      date: _dateString(DateTime.now()),
+      dailyPracticeTime: practices.first.dailyPracticeTime,
       practices: practices,
     );
   }
