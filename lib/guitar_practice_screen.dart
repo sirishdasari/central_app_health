@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'guitar_practice_api.dart';
 import 'smart_guitar_ble.dart';
-import 'dart:convert';
+import 'dart:async';
 class GuitarPracticeScreen extends StatefulWidget{const GuitarPracticeScreen({super.key});@override State<GuitarPracticeScreen>createState()=>_GuitarPracticeScreenState();}
 class _GuitarPracticeScreenState extends State<GuitarPracticeScreen>{final api=GuitarPracticeApi();GuitarPracticeResponse? data;bool loading=true;bool bleBusy=false;bool bleConnected=false;
 @override void initState(){super.initState();_load();_listenBle();}
