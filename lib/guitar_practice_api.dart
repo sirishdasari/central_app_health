@@ -82,7 +82,6 @@ class GuitarPracticeApi {
         databaseId: AppwriteConfig.databaseId,
         collectionId: collectionId,
         queries: [
-          Query.orderDesc(r'\$createdAt'),
           Query.limit(pageSize),
           Query.offset(offset),
         ],
