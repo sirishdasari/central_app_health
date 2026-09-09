@@ -12,6 +12,21 @@ void _listenBle(){_bleSub=SmartGuitarBle.instance.statusStream.listen((s){if(mou
   if(payload==null)return;
   await SmartGuitarBle.instance.syncTasks({'date':payload.date,'dailyPracticeTime':payload.dailyPracticeTime,'practices':payload.practices.map((p)=>{'id':p.id,'title':p.title,'completed':p.completed,'suggestedTime':p.suggestedTime,'duration':p.duration,'description':p.description,'dailyPracticeTime':p.dailyPracticeTime}).toList()});
 }
+Future<void> _pullProgressFromGuitar() async {
+  final progress = await SmartGuitarBle.instance.getProgress();
+  final items = (progress['practices'] as List?) ?? const [];
+  for (final raw in items) {
+    if (raw is! Map) continue;
+    final id = raw['id']?.toString();
+    if (id == null || id.isEmpty) continue;
+    final seconds = (raw['practicedSeconds'] as num?)?.toInt() ?? 0;
+    final today = (raw['todayPracticeSeconds'] as num?)?.toInt();
+    final update = <String,dynamic>{'practicedSeconds': seconds};
+    if (today != null) update['dailyPracticeSeconds'] = today;
+    await api.update(id, update);
+  }
+  await _load();
+}
 Future<void> _bleSync() async {
   setState(()=>bleBusy=true);
   try {
