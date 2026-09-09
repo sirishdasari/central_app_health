@@ -198,7 +198,7 @@ class _GuitarTunerSheetState extends State<GuitarTunerSheet> {
   @override Widget build(BuildContext context) {
     return Material(
       color: const Color(0xFF06131A),
-      borderRadius: embedded ? BorderRadius.zero : const BorderRadius.vertical(top: Radius.circular(30)),
+      borderRadius: widget.embedded ? BorderRadius.zero : const BorderRadius.vertical(top: Radius.circular(30)),
       clipBehavior: Clip.antiAlias,
       child: SafeArea(
         child: SingleChildScrollView(
