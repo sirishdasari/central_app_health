@@ -253,7 +253,7 @@ class _GuitarTunerSheetState extends State<GuitarTunerSheet> {
               Expanded(child: Text(
                 'Tune until the needle reaches the green center zone. '
                 'A sound plays once when the string is in tune.',
-                style: TextStyle(color: Colors.white45, fontSize: 12.5, height: 1.35))),
+                style: TextStyle(color: Colors.white54, fontSize: 12.5, height: 1.35))),
             ]),
           ]),
         ),
@@ -275,7 +275,7 @@ class _InfoTile extends StatelessWidget {
         Icon(icon, color: c, size: 21), const SizedBox(width: 9),
         Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Text(title, style: const TextStyle(color: Colors.white70, fontWeight: FontWeight.w700)),
-          Text(subtitle, style: const TextStyle(color: Colors.white35, fontSize: 11)),
+          Text(subtitle, style: const TextStyle(color: Colors.white38, fontSize: 11)),
         ])),
       ]),
     );
