@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import '../appwrite_health_service.dart';
 import 'health_service.dart';
 import '../auth_service.dart';
-import '../guitar_practice_screen.dart';
+import '../guitar_tuner.dart';
 
 class HealthScreen extends StatefulWidget {
   const HealthScreen({super.key, this.onLoggedOut});
@@ -17,6 +17,7 @@ class _HealthScreenState extends State<HealthScreen> {
   bool loading = true;
   bool syncing = false;
   String? error;
+  int _tab = 0;
 
   @override void initState() { super.initState(); _load(); }
 
@@ -49,7 +50,7 @@ class _HealthScreenState extends State<HealthScreen> {
     }
   }
 
-  @override Widget build(BuildContext context) {
+  Widget _healthView(BuildContext context) {
     final s = summary;
     final steps = s?.steps ?? 0;
     final progress = (steps / 10000).clamp(0.0, 1.0);
@@ -59,9 +60,6 @@ class _HealthScreenState extends State<HealthScreen> {
         backgroundColor: Colors.transparent,
         foregroundColor: Colors.white,
         title: const Text('Health', style: TextStyle(fontWeight: FontWeight.w700)),
-        actions: [
-          IconButton(icon: const Icon(Icons.music_note_rounded), tooltip: 'Guitar Practice', onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const GuitarPracticeScreen()))),
-          IconButton(icon: const Icon(Icons.settings_outlined), onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => SyncSettingsScreen(onLoggedOut: widget.onLoggedOut))))],
       ),
       body: RefreshIndicator(
         onRefresh: _load,
@@ -95,6 +93,43 @@ class _HealthScreenState extends State<HealthScreen> {
             OutlinedButton.icon(onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => ActivityDetailsScreen(summary: s!))), icon: const Icon(Icons.insights_rounded), label: const Text('View activity details')),
           ],
         ]),
+      ),
+    );
+  }
+
+  @override Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFF06131A),
+      body: IndexedStack(
+        index: _tab,
+        children: [
+          _healthView(context),
+          const GuitarTunerSheet(embedded: true),
+          SyncSettingsScreen(onLoggedOut: widget.onLoggedOut),
+        ],
+      ),
+      bottomNavigationBar: NavigationBar(
+        selectedIndex: _tab,
+        onDestinationSelected: (index) => setState(() => _tab = index),
+        backgroundColor: const Color(0xFF081B24),
+        indicatorColor: const Color(0xFF123B2A),
+        destinations: const [
+          NavigationDestination(
+            icon: Icon(Icons.favorite_outline_rounded),
+            selectedIcon: Icon(Icons.favorite_rounded),
+            label: 'Health',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.tune_rounded),
+            selectedIcon: Icon(Icons.tune_rounded),
+            label: 'Tuner',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.settings_outlined),
+            selectedIcon: Icon(Icons.settings_rounded),
+            label: 'Settings',
+          ),
+        ],
       ),
     );
   }
