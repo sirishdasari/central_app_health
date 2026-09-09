@@ -21,12 +21,14 @@ class GuitarPractice {
   final String description;
   final int dailyPracticeTime;
 
-  factory GuitarPractice.fromRow(Row row) {
-    final data = row.data;
+  factory GuitarPractice.fromDocument(Document document) {
+    final data = document.data;
 
     return GuitarPractice(
-      id: row.$id,
-      title: data['sessionName']?.toString() ?? '',
+      id: document.$id,
+      title: data['sessionName']?.toString() ??
+          data['title']?.toString() ??
+          '',
       completed: data['completed'] == true,
       suggestedTime: data['suggestedTime']?.toString() ?? '',
       duration: (data['duration'] as num?)?.toInt() ?? 0,
@@ -48,20 +50,27 @@ class GuitarPracticeResponse {
   final List<GuitarPractice> practices;
 }
 
-/// Direct Appwrite Cloud access for the hardcoded guitarPractice table.
+/// Direct Appwrite Cloud access for the hardcoded guitarPractice collection.
+///
+/// This intentionally uses the Databases API so it works with appwrite
+/// Flutter SDK 17.1.0. TablesDB requires SDK 18+.
 class GuitarPracticeApi {
-  static const String tableId = 'guitarPractice';
+  static const String collectionId = 'guitarPractice';
 
   final Client _client = Client()
       .setEndpoint(AppwriteConfig.endpoint)
       .setProject(AppwriteConfig.projectId);
 
-  late final TablesDB _tablesDB = TablesDB(_client);
+  late final Databases _databases = Databases(_client);
 
   void _validateConfig() {
     if (AppwriteConfig.projectId.isEmpty) {
-      throw Exception('APPWRITE_PROJECT_ID is not configured');
+      throw Exception(
+        'APPWRITE_PROJECT_ID is not configured. '
+        'Run Flutter with --dart-define=APPWRITE_PROJECT_ID=...',
+      );
     }
+
     if (AppwriteConfig.databaseId.isEmpty) {
       throw Exception('APPWRITE_DATABASE_ID is not configured');
     }
@@ -70,18 +79,18 @@ class GuitarPracticeApi {
   Future<GuitarPracticeResponse> list() async {
     _validateConfig();
 
-    final result = await _tablesDB.listRows(
+    final result = await _databases.listDocuments(
       databaseId: AppwriteConfig.databaseId,
-      tableId: tableId,
+      collectionId: collectionId,
       queries: [
         Query.orderDesc(r'\$createdAt'),
         Query.limit(100),
       ],
-      total: false,
     );
 
-    final rows = result.rows;
-    if (rows.isEmpty) {
+    final documents = result.documents;
+
+    if (documents.isEmpty) {
       return GuitarPracticeResponse(
         date: _dateString(DateTime.now()),
         dailyPracticeTime: 0,
@@ -89,49 +98,53 @@ class GuitarPracticeApi {
       );
     }
 
-    final localToday = _dateString(DateTime.now());
-    final datedRows = <_DatedRow>[];
+    final today = _dateString(DateTime.now());
+    final dated = <_DatedDocument>[];
 
-    for (final row in rows) {
-      final createdAt = row.$createdAt;
+    for (final document in documents) {
+      final createdAt = document.$createdAt;
       if (createdAt.isEmpty) continue;
 
       final parsed = DateTime.tryParse(createdAt);
       if (parsed == null) continue;
 
-      datedRows.add(
-        _DatedRow(
-          row: row,
+      dated.add(
+        _DatedDocument(
+          document: document,
           date: _dateString(parsed.toLocal()),
           createdAt: parsed,
         ),
       );
     }
 
-    if (datedRows.isEmpty) {
-      final practices = rows.map(GuitarPractice.fromRow).toList();
+    if (dated.isEmpty) {
+      final practices =
+          documents.map(GuitarPractice.fromDocument).toList(growable: false);
+
       return GuitarPracticeResponse(
-        date: localToday,
+        date: today,
         dailyPracticeTime:
             practices.isEmpty ? 0 : practices.first.dailyPracticeTime,
         practices: practices,
       );
     }
 
-    final hasToday = datedRows.any((item) => item.date == localToday);
+    final hasToday = dated.any((item) => item.date == today);
+
     final selectedDate = hasToday
-        ? localToday
-        : datedRows.map((item) => item.date).reduce(
+        ? today
+        : dated.map((item) => item.date).reduce(
             (a, b) => a.compareTo(b) > 0 ? a : b,
           );
 
-    final selected = datedRows
+    final selected = dated
         .where((item) => item.date == selectedDate)
         .toList()
       ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
 
-    final practices =
-        selected.map((item) => GuitarPractice.fromRow(item.row)).toList();
+    final practices = selected
+        .map((item) => GuitarPractice.fromDocument(item.document))
+        .toList(growable: false);
 
     return GuitarPracticeResponse(
       date: selectedDate,
@@ -144,10 +157,10 @@ class GuitarPracticeApi {
   Future<void> create(Map<String, dynamic> value) async {
     _validateConfig();
 
-    await _tablesDB.createRow(
+    await _databases.createDocument(
       databaseId: AppwriteConfig.databaseId,
-      tableId: tableId,
-      rowId: ID.unique(),
+      collectionId: collectionId,
+      documentId: ID.unique(),
       data: _toAppwriteData(value),
     );
   }
@@ -162,10 +175,10 @@ class GuitarPracticeApi {
     final data = _toAppwriteData(value);
     if (data.isEmpty) return;
 
-    await _tablesDB.updateRow(
+    await _databases.updateDocument(
       databaseId: AppwriteConfig.databaseId,
-      tableId: tableId,
-      rowId: id,
+      collectionId: collectionId,
+      documentId: id,
       data: data,
     );
   }
@@ -177,10 +190,10 @@ class GuitarPracticeApi {
       throw Exception('Practice id is empty');
     }
 
-    await _tablesDB.deleteRow(
+    await _databases.deleteDocument(
       databaseId: AppwriteConfig.databaseId,
-      tableId: tableId,
-      rowId: id,
+      collectionId: collectionId,
+      documentId: id,
     );
   }
 
@@ -190,19 +203,26 @@ class GuitarPracticeApi {
     if (value.containsKey('title')) {
       data['sessionName'] = value['title']?.toString() ?? '';
     }
+
     if (value.containsKey('completed')) {
       data['completed'] = value['completed'] == true;
     }
+
     if (value.containsKey('suggestedTime')) {
       data['suggestedTime'] = value['suggestedTime']?.toString() ?? '';
     }
+
     if (value.containsKey('duration')) {
       final duration = value['duration'];
-      if (duration is num) data['duration'] = duration.toInt();
+      if (duration is num) {
+        data['duration'] = duration.toInt();
+      }
     }
+
     if (value.containsKey('description')) {
       data['description'] = value['description']?.toString() ?? '';
     }
+
     if (value.containsKey('dailyPracticeTime')) {
       final practiceTime = value['dailyPracticeTime'];
       if (practiceTime is num) {
@@ -221,14 +241,14 @@ class GuitarPracticeApi {
   }
 }
 
-class _DatedRow {
-  const _DatedRow({
-    required this.row,
+class _DatedDocument {
+  const _DatedDocument({
+    required this.document,
     required this.date,
     required this.createdAt,
   });
 
-  final Row row;
+  final Document document;
   final String date;
   final DateTime createdAt;
 }
