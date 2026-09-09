@@ -31,7 +31,7 @@ class SmartGuitarBle {
   }
 
   Future<void> connect(BluetoothDevice d) async {
-    await d.connect(timeout:const Duration(seconds:10),autoConnect:false);
+    await d.connect(license: License.nonprofit, timeout: const Duration(seconds:10), autoConnect:false);
     device=d;
     final services=await d.discoverServices();
     final service=services.firstWhere((s)=>s.uuid==serviceUuid);
