@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../appwrite_health_service.dart';
 import 'health_service.dart';
 import '../auth_service.dart';
+import '../guitar_practice_screen.dart';
 
 class HealthScreen extends StatefulWidget {
   const HealthScreen({super.key, this.onLoggedOut});
@@ -58,7 +59,9 @@ class _HealthScreenState extends State<HealthScreen> {
         backgroundColor: Colors.transparent,
         foregroundColor: Colors.white,
         title: const Text('Health', style: TextStyle(fontWeight: FontWeight.w700)),
-        actions: [IconButton(icon: const Icon(Icons.settings_outlined), onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => SyncSettingsScreen(onLoggedOut: widget.onLoggedOut))))],
+        actions: [
+          IconButton(icon: const Icon(Icons.music_note_rounded), tooltip: 'Guitar Practice', onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const GuitarPracticeScreen()))),
+          IconButton(icon: const Icon(Icons.settings_outlined), onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => SyncSettingsScreen(onLoggedOut: widget.onLoggedOut))))],
       ),
       body: RefreshIndicator(
         onRefresh: _load,
