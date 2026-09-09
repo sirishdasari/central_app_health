@@ -2,7 +2,6 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'guitar_practice_api.dart';
 import 'smart_guitar_ble.dart';
-import 'guitar_tuner.dart';
 
 class GuitarPracticeScreen extends StatefulWidget {
   const GuitarPracticeScreen({super.key});
@@ -36,16 +35,6 @@ class _GuitarPracticeScreenState extends State<GuitarPracticeScreen> {
   void dispose() {
     _bleSub?.cancel();
     super.dispose();
-  }
-
-  Future<void> _openTuner() async {
-    await showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      useSafeArea: true,
-      backgroundColor: Colors.transparent,
-      builder: (_) => const GuitarTunerSheet(),
-    );
   }
 
   Future<void> _syncBleSilently() async {
@@ -220,11 +209,6 @@ class _GuitarPracticeScreenState extends State<GuitarPracticeScreen> {
                   ? const Color(0xFF45E88F)
                   : Colors.white54,
             ),
-          ),
-          IconButton(
-            onPressed: _openTuner,
-            tooltip: 'Guitar tuner',
-            icon: const Icon(Icons.tune_rounded, color: Colors.white70),
           ),
           IconButton(
             onPressed: loading ? null : _load,
