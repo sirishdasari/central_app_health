@@ -175,6 +175,18 @@ class SmartGuitarBle {
       await newData.setNotifyValue(true);
 
       _status.add('connected');
+
+      // Synchronize the ESP32 clock immediately after every BLE connection.
+      // The phone sends UTC Unix time; the ESP32 applies its configured local
+      // timezone when displaying the Home page clock.
+      try {
+        await syncTime();
+        _status.add('time_synced');
+      } catch (_) {
+        // A clock-sync failure must not make an otherwise healthy BLE
+        // connection appear disconnected.
+        _status.add('time_sync_failed');
+      }
     } catch (e) {
       control = null;
       data = null;
@@ -306,6 +318,25 @@ class SmartGuitarBle {
       data = null;
       _status.add('disconnected');
     }
+  }
+
+  /// Send the phone's current UTC time to the ESP32 as Unix seconds.
+  ///
+  /// The ESP32 uses its configured timezone (currently IST) when rendering
+  /// the Home page clock.
+  Future<void> syncTime() async {
+    final w = control;
+    final d = device;
+
+    if (w == null || d == null || !d.isConnected) {
+      throw Exception('Smart Guitar is not connected');
+    }
+
+    final epochSeconds = DateTime.now().toUtc().millisecondsSinceEpoch ~/ 1000;
+    await w.write(
+      utf8.encode('SET_TIME:$epochSeconds'),
+      withoutResponse: false,
+    );
   }
 
   Future<String> requestTasks() => _request('GET_TASKS');
