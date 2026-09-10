@@ -123,32 +123,42 @@ class _TunerState extends State<GuitarTunerSheet> with SingleTickerProviderState
     for(final v in x){final z=v-mean;energy+=z*z;}
     if(math.sqrt(energy/n)<180)return null;
 
-    final minLag=(44100/500).round();
-    final maxLag=math.min((44100/70).round(),n~/2);
-    var best=0,bestC=0.0;
+    // The previous speedometer tuner used the same autocorrelation idea,
+    // but scanning every possible lag on every microphone packet is too
+    // expensive for the richer UI. Search only around the six guitar
+    // fundamentals instead. This keeps the proven pitch method while making
+    // continuous E/A/D/G/B/E tracking cheap enough for the UI.
+    const sr=44100.0;
+    var bestLag=0;
+    var bestC=0.0;
 
-    for(var lag=minLag;lag<=maxLag;lag++){
-      var dot=0.0,a2=0.0,b2=0.0;
-      for(var i=0;i<n-lag;i+=2){
-        final aa=x[i]-mean,bb=x[i+lag]-mean;
-        dot+=aa*bb;a2+=aa*aa;b2+=bb*bb;
-      }
-      if(a2>0&&b2>0){
-        final cc=dot/math.sqrt(a2*b2);
-        if(cc>bestC){bestC=cc;best=lag;}
+    for(final target in _ns){
+      final expected=sr/target.f;
+      final from=math.max(1,(expected*.94).round());
+      final to=math.min(n~/2,(expected*1.06).round());
+
+      for(var lag=from;lag<=to;lag++){
+        var dot=0.0,a2=0.0,b2=0.0;
+        for(var i=0;i<n-lag;i+=2){
+          final aa=x[i]-mean,bb=x[i+lag]-mean;
+          dot+=aa*bb;a2+=aa*aa;b2+=bb*bb;
+        }
+        if(a2>0&&b2>0){
+          final c=dot/math.sqrt(a2*b2);
+          if(c>bestC){bestC=c;bestLag=lag;}
+        }
       }
     }
 
-    // Keep the original working confidence gate.
-    if(best==0||bestC<.55)return null;
+    if(bestLag==0||bestC<.55)return null;
 
-    var lag=best.toDouble();
-    if(best>minLag&&best<maxLag){
-      final y1=_corr(x,best-1,mean),y2=_corr(x,best,mean),y3=_corr(x,best+1,mean);
+    var lag=bestLag.toDouble();
+    if(bestLag>1&&bestLag<n~/2){
+      final y1=_corr(x,bestLag-1,mean),y2=_corr(x,bestLag,mean),y3=_corr(x,bestLag+1,mean);
       final d=y1-2*y2+y3;
       if(d.abs()>1e-9)lag+=.5*(y1-y3)/d;
     }
-    return _P(44100/lag,bestC);
+    return _P(sr/lag,bestC);
   }
 
   double _corr(List<int> x,int lag,double mean){
