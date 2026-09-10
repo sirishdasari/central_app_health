@@ -22,7 +22,155 @@ class SmartGuitarBle {
   final _status = StreamController<String>.broadcast();
   Stream<String> get statusStream => _status.stream;
 
+  StreamSubscription<BluetoothConnectionState>? _connectionSubscription;
+  StreamSubscription<BluetoothAdapterState>? _adapterSubscription;
+  bool _autoReconnectEnabled = false;
+  bool _autoReconnectStarting = false;
+  bool _initialised = false;
+  bool _userDisconnectRequested = false;
+  bool _configuring = false;
+
   bool get connected => device?.isConnected == true;
+
+  /// Start the phone-side automatic reconnect service.
+  /// Android keeps the BLE bond, so the app can find the previously paired
+  /// Smart Guitar without asking the user to scan or pair again.
+  Future<void> initializeAutoReconnect() async {
+    if (_initialised) return;
+    _initialised = true;
+
+    _adapterSubscription = FlutterBluePlus.adapterState.listen((state) {
+      if (state == BluetoothAdapterState.on) {
+        unawaited(_startAutoReconnect());
+      }
+    });
+
+    if (FlutterBluePlus.adapterStateNow == BluetoothAdapterState.on) {
+      await _startAutoReconnect();
+    }
+  }
+
+  Future<void> _startAutoReconnect() async {
+    if (_autoReconnectStarting) return;
+    if (FlutterBluePlus.adapterStateNow != BluetoothAdapterState.on) return;
+
+    _autoReconnectStarting = true;
+    try {
+      final permissions = await [
+        Permission.bluetoothScan,
+        Permission.bluetoothConnect,
+      ].request();
+
+      if (permissions.values.any((p) => !p.isGranted)) return;
+
+      BluetoothDevice? candidate = device;
+
+      // Android retains bonded devices across app restarts and guitar power
+      // cycles. Use that list instead of requiring another scan/pair action.
+      if (candidate == null) {
+        try {
+          final bonded = await FlutterBluePlus.bondedDevices;
+          for (final d in bonded) {
+            final name = d.platformName.trim().toLowerCase();
+            if (name == 'smart guitar' || name.contains('smart guitar')) {
+              candidate = d;
+              break;
+            }
+          }
+        } catch (_) {
+          // If bondedDevices is unavailable, the normal manual scan remains
+          // available from the UI.
+        }
+      }
+
+      if (candidate == null) return;
+
+      _autoReconnectEnabled = true;
+      _userDisconnectRequested = false;
+      device = candidate;
+      _watchConnection(candidate);
+
+      if (candidate.isConnected) {
+        await _setupConnectedDevice(candidate);
+        return;
+      }
+
+      _status.add('reconnecting');
+
+      // autoConnect deliberately has no short timeout and no MTU argument.
+      // Android keeps trying when the guitar is temporarily powered off.
+      try {
+        await candidate.connect(
+          license: License.nonprofit,
+          autoConnect: true,
+          mtu: null,
+        );
+      } catch (_) {
+        // The connectionState stream reports the actual result. Background
+        // reconnect must not surface a one-shot exception to the UI.
+      }
+    } finally {
+      _autoReconnectStarting = false;
+    }
+  }
+
+  void _watchConnection(BluetoothDevice d) {
+    _connectionSubscription?.cancel();
+    _connectionSubscription = d.connectionState.listen((state) {
+      if (state == BluetoothConnectionState.connected) {
+        unawaited(_setupConnectedDevice(d));
+      } else if (state == BluetoothConnectionState.disconnected) {
+        control = null;
+        data = null;
+        _status.add('disconnected');
+
+        if (_autoReconnectEnabled && !_userDisconnectRequested) {
+          _status.add('reconnecting');
+        }
+      }
+    });
+  }
+
+  Future<void> _setupConnectedDevice(BluetoothDevice d) async {
+    if (_configuring) return;
+    _configuring = true;
+
+    try {
+      device = d;
+
+      // FlutterBluePlus requires service discovery again after every BLE
+      // reconnection.
+      final services = await d.discoverServices();
+      final service = services.firstWhere(
+        (s) => s.uuid == serviceUuid,
+        orElse: () => throw Exception(
+          'Smart Guitar connected, but its practice service was not found.',
+        ),
+      );
+
+      final newControl = service.characteristics.firstWhere(
+        (c) => c.uuid == controlUuid,
+        orElse: () => throw Exception('Smart Guitar control channel not found.'),
+      );
+
+      final newData = service.characteristics.firstWhere(
+        (c) => c.uuid == dataUuid,
+        orElse: () => throw Exception('Smart Guitar data channel not found.'),
+      );
+
+      control = newControl;
+      data = newData;
+      await newData.setNotifyValue(true);
+
+      _status.add('connected');
+    } catch (e) {
+      control = null;
+      data = null;
+      _status.add('connection_error: $e');
+    } finally {
+      _configuring = false;
+    }
+  }
 
   Future<List<ScanResult>> scan({
     Duration timeout = const Duration(seconds: 8),
@@ -43,8 +191,6 @@ class SmartGuitarBle {
       );
     }
 
-    // The Android radio itself must be ON. Do not confuse this with the
-    // Smart Guitar BLE connection state.
     final adapter = await FlutterBluePlus.adapterState.first;
     if (adapter != BluetoothAdapterState.on) {
       throw Exception('Phone Bluetooth is turned off.');
@@ -60,8 +206,6 @@ class SmartGuitarBle {
     }, onError: (_) {});
 
     try {
-      // Unfiltered scan. We identify the guitar by its advertised name,
-      // then verify the custom GATT service after connecting.
       await FlutterBluePlus.startScan(
         timeout: timeout,
         androidScanMode: AndroidScanMode.lowLatency,
@@ -75,7 +219,6 @@ class SmartGuitarBle {
       }
     }
 
-    // Include anything retained by FlutterBluePlus after the scan.
     for (final item in FlutterBluePlus.lastScanResults) {
       results[item.device.remoteId.str] = item;
     }
@@ -115,6 +258,11 @@ class SmartGuitarBle {
   }
 
   Future<void> connect(BluetoothDevice d) async {
+    _autoReconnectEnabled = true;
+    _userDisconnectRequested = false;
+    device = d;
+    _watchConnection(d);
+
     try {
       await d.connect(
         license: License.nonprofit,
@@ -122,38 +270,19 @@ class SmartGuitarBle {
         autoConnect: false,
       );
     } catch (e) {
-      // flutter_blue_plus can report an "already connected" error when
-      // Android restored a previous BLE connection.
       if (!d.isConnected) rethrow;
     }
 
-    device = d;
-
-    final services = await d.discoverServices();
-
-    final service = services.firstWhere(
-      (s) => s.uuid == serviceUuid,
-      orElse: () => throw Exception(
-        'Smart Guitar connected, but its practice service was not found.',
-      ),
-    );
-
-    control = service.characteristics.firstWhere(
-      (c) => c.uuid == controlUuid,
-      orElse: () => throw Exception('Smart Guitar control channel not found.'),
-    );
-
-    data = service.characteristics.firstWhere(
-      (c) => c.uuid == dataUuid,
-      orElse: () => throw Exception('Smart Guitar data channel not found.'),
-    );
-
-    await data!.setNotifyValue(true);
-    _status.add('connected');
+    await _setupConnectedDevice(d);
   }
 
   Future<void> disconnect() async {
+    _userDisconnectRequested = true;
+    _autoReconnectEnabled = false;
+
     final d = device;
+    await _connectionSubscription?.cancel();
+    _connectionSubscription = null;
 
     try {
       if (d != null && d.isConnected) {
@@ -190,7 +319,7 @@ class SmartGuitarBle {
     sub = c.onValueReceived.listen((bytes) {
       final s = utf8.decode(bytes, allowMalformed: true);
 
-      if (s == '\\n') {
+      if (s == '\n') {
         if (!done.isCompleted) {
           done.complete(buffer.toString());
         }
@@ -224,8 +353,6 @@ class SmartGuitarBle {
     );
 
     final json = jsonEncode(apiPayload);
-
-    // Keep this below the ESP32 RX chunk size.
     const size = 170;
 
     for (var i = 0; i < json.length; i += size) {
