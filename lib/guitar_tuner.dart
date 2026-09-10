@@ -6,867 +6,492 @@ import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
 import 'package:record/record.dart';
 
-/// Guitar Tuna-inspired tuner UI for Smart Guitar.
-///
-/// Keeps the existing public entry points:
-///   GuitarTunerSheet(embedded: ...)
-///   GuitarTunerScreen
-///
-/// The tuner is intentionally not a speedometer/gauge.  It uses:
-/// - central vertical tuning line
-/// - animated symmetric signal bars
-/// - large detected note
-/// - frequency + cents
-/// - +/-50 cents ruler
-/// - E A D G B E string selector
-/// - green success only after the SELECTED string is verified for several
-///   consecutive frames at the correct octave and within +/-5 cents
-/// - one short chime when a selected string is successfully verified
 class GuitarTunerSheet extends StatefulWidget {
-  const GuitarTunerSheet({
-    super.key,
-    this.embedded = false,
-    this.onClose,
-  });
-
+  const GuitarTunerSheet({super.key, this.embedded = false, this.onClose});
   final bool embedded;
   final VoidCallback? onClose;
-
-  @override
-  State<GuitarTunerSheet> createState() => _GuitarTunerSheetState();
+  @override State<GuitarTunerSheet> createState() => _TunerState();
 }
 
 class GuitarTunerScreen extends StatelessWidget {
   const GuitarTunerScreen({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return const Scaffold(
-      backgroundColor: _TunerColors.background,
-      body: SafeArea(
-        child: GuitarTunerSheet(embedded: true),
-      ),
-    );
-  }
+  @override Widget build(BuildContext context) => const Scaffold(
+    backgroundColor: Color(0xFF06151D),
+    body: SafeArea(child: GuitarTunerSheet(embedded: true)),
+  );
 }
 
-class _TunerColors {
-  static const background = Color(0xFF06151D);
-  static const panel = Color(0xFF081922);
-  static const card = Color(0xFF0C222D);
-  static const cardBorder = Color(0xFF193642);
-  static const text = Color(0xFFF2F5F6);
-  static const muted = Color(0xFF8E9AA0);
-  static const dim = Color(0xFF56666D);
-  static const green = Color(0xFF19F59A);
-  static const greenDark = Color(0xFF0A573B);
-  static const red = Color(0xFFFF6E6E);
-  static const amber = Color(0xFFFFC33D);
-}
-
-class _TuningString {
-  const _TuningString(this.note, this.frequency, this.number);
-
+class _StringTarget {
+  const _StringTarget(this.note, this.hz, this.number);
   final String note;
-  final double frequency;
+  final double hz;
   final int number;
 }
 
-const List<_TuningString> _strings = [
-  _TuningString('E', 82.41, 6),
-  _TuningString('A', 110.00, 5),
-  _TuningString('D', 146.83, 4),
-  _TuningString('G', 196.00, 3),
-  _TuningString('B', 246.94, 2),
-  _TuningString('E', 329.63, 1),
+const _targets = <_StringTarget>[
+  _StringTarget('E', 82.41, 6),
+  _StringTarget('A', 110.00, 5),
+  _StringTarget('D', 146.83, 4),
+  _StringTarget('G', 196.00, 3),
+  _StringTarget('B', 246.94, 2),
+  _StringTarget('E', 329.63, 1),
 ];
 
-class _GuitarTunerSheetState extends State<GuitarTunerSheet>
-    with SingleTickerProviderStateMixin {
-  final AudioRecorder _recorder = AudioRecorder();
-  final AudioPlayer _successPlayer = AudioPlayer();
+const _green = Color(0xFF19F59A);
+const _red = Color(0xFFFF6E6E);
+const _amber = Color(0xFFFFC33D);
+const _bg = Color(0xFF06151D);
+const _card = Color(0xFF0C222D);
+const _border = Color(0xFF193642);
 
-  StreamSubscription<Uint8List>? _audioSubscription;
-  final List<int> _sampleBuffer = <int>[];
-  late final AnimationController _waveController;
+class _Pitch {
+  const _Pitch(this.hz, this.confidence);
+  final double hz;
+  final double confidence;
+}
+
+class _TunerState extends State<GuitarTunerSheet> with SingleTickerProviderStateMixin {
+  final _recorder = AudioRecorder();
+  final _chime = AudioPlayer();
+  final _samples = <int>[];
+  StreamSubscription<Uint8List>? _subscription;
+  late final AnimationController _animation;
 
   bool _listening = false;
   bool _hasSignal = false;
-  bool _inTune = false;
-  bool _lastInTune = false;
-  bool _playingSuccess = false;
+  bool _verified = false;
+  bool _playingChime = false;
 
-  int _selectedString = 5;
-  int _detectedString = 5;
+  int _selected = 5;
+  int _detected = 5;
+  int _verifyTarget = -1;
+  int _verifyFrames = 0;
+  static const _requiredFrames = 3;
 
-  final Set<int> _tunedStrings = <int>{};
-
-  // Do not award a tick from one lucky audio frame. The selected string must
-  // be detected consistently at the correct octave before it is verified.
-  int _verificationString = -1;
-  int _verificationFrames = 0;
-  static const int _requiredVerificationFrames = 3;
-
+  final Set<int> _tuned = <int>{};
   double _frequency = 0;
   double _cents = 0;
-  double _signal = 0;
+  double _confidence = 0;
   double _smoothedFrequency = 0;
-  double _smoothedCents = 0;
 
   @override
   void initState() {
     super.initState();
-    _waveController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 900),
-    )..repeat();
+    _animation = AnimationController(vsync: this, duration: const Duration(milliseconds: 900))..repeat();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _start());
   }
 
   @override
   void dispose() {
-    _stopListening();
-    _waveController.dispose();
-    _successPlayer.dispose();
+    _stop();
+    _animation.dispose();
+    _chime.dispose();
     _recorder.dispose();
     super.dispose();
   }
 
-  Future<void> _startListening() async {
-    final allowed = await _recorder.hasPermission();
-    if (!allowed || !mounted) return;
-    await _audioSubscription?.cancel();
-
+  Future<void> _start() async {
+    if (!await _recorder.hasPermission() || !mounted) return;
     try {
-      final stream = await _recorder.startStream(
-        const RecordConfig(
-          encoder: AudioEncoder.pcm16bits,
-          sampleRate: 44100,
-          numChannels: 1,
-          // Keep the proven speedometer-tuner audio path.
-          autoGain: false,
-          echoCancel: false,
-          noiseSuppress: false,
-        ),
-      );
-
-      _sampleBuffer.clear();
-      if (!mounted) return;
-      setState(() => _listening = true);
-      _audioSubscription = stream.listen(
-        _processPcm,
-        onError: (_) {
-          if (mounted) setState(() => _listening = false);
-        },
-      );
-    } catch (_) {
-      if (mounted) setState(() => _listening = false);
-    }
+      final stream = await _recorder.startStream(const RecordConfig(
+        encoder: AudioEncoder.pcm16bits,
+        sampleRate: 44100,
+        numChannels: 1,
+        autoGain: false,
+        echoCancel: false,
+        noiseSuppress: false,
+      ));
+      _samples.clear();
+      _subscription = stream.listen(_onAudio, onError: (_) {
+        if (mounted) setState(() => _listening = false);
+      });
+      if (mounted) setState(() => _listening = true);
+    } catch (_) {}
   }
 
-  Future<void> _stopListening() async {
-    await _audioSubscription?.cancel();
-    _audioSubscription = null;
-    _sampleBuffer.clear();
-    try {
-      await _recorder.stop();
-    } catch (_) {}
-
+  Future<void> _stop() async {
+    await _subscription?.cancel();
+    _subscription = null;
+    _samples.clear();
+    try { await _recorder.stop(); } catch (_) {}
     if (!mounted) return;
     setState(() {
       _listening = false;
       _hasSignal = false;
-      _inTune = false;
-      _lastInTune = false;
+      _verified = false;
       _frequency = 0;
       _cents = 0;
-      _signal = 0;
+      _confidence = 0;
       _smoothedFrequency = 0;
-      _smoothedCents = 0;
-      _verificationString = -1;
-      _verificationFrames = 0;
+      _verifyTarget = -1;
+      _verifyFrames = 0;
     });
   }
 
-  void _processPcm(Uint8List bytes) {
-    if (bytes.length < 2048) return;
+  Future<void> _toggle() => _listening ? _stop() : _start();
 
-    final samples = Int16List(bytes.length ~/ 2);
-    final data = ByteData.sublistView(bytes);
-    for (int i = 0; i < samples.length; i++) {
-      samples[i] = data.getInt16(i * 2, Endian.little);
+  void _onAudio(Uint8List bytes) {
+    for (var i = 0; i + 1 < bytes.length; i += 2) {
+      final value = bytes[i] | (bytes[i + 1] << 8);
+      _samples.add(value > 32767 ? value - 65536 : value);
     }
 
-    _sampleBuffer.addAll(samples);
-    const windowSize = 4096;
-    if (_sampleBuffer.length > windowSize * 2) {
-      _sampleBuffer.removeRange(0, _sampleBuffer.length - windowSize);
-    }
-    if (_sampleBuffer.length < windowSize) return;
+    const n = 4096;
+    if (_samples.length < n) return;
+    if (_samples.length > n * 2) _samples.removeRange(0, _samples.length - n);
 
-    final analysis = Int16List.fromList(
-      _sampleBuffer.sublist(_sampleBuffer.length - windowSize),
-    );
-
-    double chunkSum = 0;
-    for (final value in samples) chunkSum += value;
-    final chunkMean = chunkSum / samples.length;
-    double energy = 0;
-    for (final value in samples) {
-      final centered = value - chunkMean;
-      energy += centered * centered;
-    }
-    final rms = math.sqrt(energy / samples.length);
-    final signal = (rms / 1800).clamp(0.0, 1.0);
-
-    if (rms < 180) {
-      _verificationString = -1;
-      _verificationFrames = 0;
-      if (mounted) {
-        setState(() {
-          _hasSignal = false;
-          _signal = signal;
-          _inTune = false;
-        });
-      }
+    final pitch = _pitch(_samples);
+    if (pitch == null || pitch.hz < 70 || pitch.hz > 370) {
+      _verifyTarget = -1;
+      _verifyFrames = 0;
+      if (mounted) setState(() { _hasSignal = false; _verified = false; });
       return;
     }
 
-    final pitch = _detectPitch(analysis, sampleRate: 44100);
-    if (pitch == null || pitch < 70 || pitch > 370) {
-      _verificationString = -1;
-      _verificationFrames = 0;
-      if (mounted) {
-        setState(() {
-          _hasSignal = false;
-          _signal = signal;
-          _inTune = false;
-        });
-      }
-      return;
-    }
+    final actual = _nearest(pitch.hz);
+    final target = _targets[_selected];
+    final targetCents = _centsFrom(pitch.hz, target.hz);
 
-    // Detection tells us what was actually heard. The selected string is
-    // always the verification target. This is critical for the two E strings:
-    // E4 must verify the high E, while E2 must never verify it.
-    final actualIndex = _closestString(pitch);
-    final targetIndex = _selectedString;
-    final actualReference = _strings[actualIndex];
-    final targetReference = _strings[targetIndex];
+    _smoothedFrequency = _smoothedFrequency == 0
+        ? pitch.hz
+        : _smoothedFrequency * 0.72 + pitch.hz * 0.28;
 
-    final actualCents =
-        1200 * math.log(pitch / actualReference.frequency) / math.ln2;
-    final targetCents =
-        1200 * math.log(pitch / targetReference.frequency) / math.ln2;
-
-    final smoothed = _smoothedFrequency == 0
-        ? pitch
-        : (_smoothedFrequency * 0.72) + (pitch * 0.28);
-    _smoothedFrequency = smoothed;
-    _smoothedCents = (_smoothedCents * 0.72) + (actualCents * 0.28);
-
-    // First verify note identity/octave (within 50 cents), then require the
-    // actual tuning to settle within +/-5 cents for several frames.
-    final candidateMatchesTarget =
-        actualIndex == targetIndex && targetCents.abs() <= 50.0;
-
-    if (candidateMatchesTarget) {
-      if (_verificationString == targetIndex) {
-        _verificationFrames++;
+    // The detected note must match the selected string. This is what prevents
+    // low E/A from checking high E: the octave/string index must match too.
+    final correctString = actual == _selected && targetCents.abs() <= 50;
+    if (correctString) {
+      if (_verifyTarget == _selected) {
+        _verifyFrames++;
       } else {
-        _verificationString = targetIndex;
-        _verificationFrames = 1;
+        _verifyTarget = _selected;
+        _verifyFrames = 1;
       }
     } else {
-      _verificationString = -1;
-      _verificationFrames = 0;
+      _verifyTarget = -1;
+      _verifyFrames = 0;
     }
 
-    final verified = candidateMatchesTarget &&
-        _verificationFrames >= _requiredVerificationFrames &&
-        targetCents.abs() <= 5.0;
+    final verified = correctString &&
+        _verifyFrames >= _requiredFrames &&
+        targetCents.abs() <= 5;
 
     if (mounted) {
       setState(() {
         _hasSignal = true;
-        _signal = signal;
-        _frequency = smoothed;
+        _detected = actual;
+        _frequency = _smoothedFrequency;
         _cents = targetCents.clamp(-50.0, 50.0);
-        _detectedString = actualIndex;
-        _inTune = verified;
+        _confidence = pitch.confidence;
+        _verified = verified;
       });
     }
 
-    if (verified) {
-      _tunedStrings.add(targetIndex);
-      if (!_lastInTune && !_playingSuccess) {
-        _lastInTune = true;
-        // Keep the microphone callback free of blocking audio work.
-        Future<void>.microtask(_playSuccessChime);
-      }
-    } else {
-      _lastInTune = false;
-    }
+    if (verified && _tuned.add(_selected) && !_playingChime) _playChime();
   }
 
-  double? _detectPitch(
-    Int16List input, {
-    required int sampleRate,
-  }) {
-    const n = 4096;
-    if (input.length < n) return null;
+  double _centsFrom(double frequency, double target) => 1200 * math.log(frequency / target) / math.ln2;
 
+  int _nearest(double frequency) {
+    var best = 0;
+    var error = double.infinity;
+    for (var i = 0; i < _targets.length; i++) {
+      final e = _centsFrom(frequency, _targets[i].hz).abs();
+      if (e < error) { error = e; best = i; }
+    }
+    return best;
+  }
+
+  // Proven detector from the old working speedometer tuner.
+  _Pitch? _pitch(List<int> input) {
+    const n = 4096;
     var mean = 0.0;
     for (final value in input) mean += value;
     mean /= n;
 
     var energy = 0.0;
     for (final value in input) {
-      final centered = value - mean;
-      energy += centered * centered;
+      final v = value - mean;
+      energy += v * v;
     }
     if (math.sqrt(energy / n) < 180) return null;
 
-    // This is the proven detector used by the original speedometer tuner:
-    // full autocorrelation across the guitar range with the same 0.55
-    // confidence threshold and parabolic refinement.
-    final minLag = (sampleRate / 500).round();
-    final maxLag = math.min((sampleRate / 70).round(), n ~/ 2);
+    final minLag = (44100 / 500).round();
+    final maxLag = math.min((44100 / 70).round(), n ~/ 2);
     var bestLag = 0;
     var bestCorrelation = 0.0;
 
     for (var lag = minLag; lag <= maxLag; lag++) {
-      var dot = 0.0;
-      var a2 = 0.0;
-      var b2 = 0.0;
+      var dot = 0.0, a2 = 0.0, b2 = 0.0;
       for (var i = 0; i < n - lag; i += 2) {
         final a = input[i] - mean;
         final b = input[i + lag] - mean;
-        dot += a * b;
-        a2 += a * a;
-        b2 += b * b;
+        dot += a * b; a2 += a * a; b2 += b * b;
       }
-      if (a2 <= 0 || b2 <= 0) continue;
-      final correlation = dot / math.sqrt(a2 * b2);
-      if (correlation > bestCorrelation) {
-        bestCorrelation = correlation;
-        bestLag = lag;
-      }
-    }
-
-    if (bestLag == 0 || bestCorrelation < 0.55) return null;
-
-    double refinedLag = bestLag.toDouble();
-    if (bestLag > minLag && bestLag < maxLag) {
-      double corrAt(int lag) {
-        var dot = 0.0;
-        var a2 = 0.0;
-        var b2 = 0.0;
-        for (var i = 0; i < n - lag; i += 2) {
-          final a = input[i] - mean;
-          final b = input[i + lag] - mean;
-          dot += a * b;
-          a2 += a * a;
-          b2 += b * b;
+      if (a2 > 0 && b2 > 0) {
+        final correlation = dot / math.sqrt(a2 * b2);
+        if (correlation > bestCorrelation) {
+          bestCorrelation = correlation;
+          bestLag = lag;
         }
-        if (a2 <= 0 || b2 <= 0) return 0;
-        return dot / math.sqrt(a2 * b2);
-      }
-
-      final y1 = corrAt(bestLag - 1);
-      final y2 = corrAt(bestLag);
-      final y3 = corrAt(bestLag + 1);
-      final denominator = y1 - (2 * y2) + y3;
-      if (denominator.abs() > 1e-9) {
-        refinedLag += 0.5 * (y1 - y3) / denominator;
       }
     }
 
-    if (refinedLag <= 0) return null;
-    return sampleRate / refinedLag;
-  }
+    if (bestLag == 0 || bestCorrelation < .55) return null;
 
-  int _closestString(double frequency) {
-    int best = 0;
-    double error = double.infinity;
-    for (int i = 0; i < _strings.length; i++) {
-      final cents =
-          (1200 * math.log(frequency / _strings[i].frequency) / math.ln2)
-              .abs();
-      if (cents < error) {
-        error = cents;
-        best = i;
-      }
+    var lag = bestLag.toDouble();
+    if (bestLag > minLag && bestLag < maxLag) {
+      final y1 = _correlation(input, bestLag - 1, mean);
+      final y2 = _correlation(input, bestLag, mean);
+      final y3 = _correlation(input, bestLag + 1, mean);
+      final d = y1 - 2 * y2 + y3;
+      if (d.abs() > 1e-9) lag += .5 * (y1 - y3) / d;
     }
-    return best;
+    return _Pitch(44100 / lag, bestCorrelation);
   }
 
-  Future<void> _playSuccessChime() async {
-    _playingSuccess = true;
+  double _correlation(List<int> x, int lag, double mean) {
+    var dot = 0.0, a2 = 0.0, b2 = 0.0;
+    for (var i = 0; i < x.length - lag; i += 2) {
+      final a = x[i] - mean, b = x[i + lag] - mean;
+      dot += a * b; a2 += a * a; b2 += b * b;
+    }
+    return a2 > 0 && b2 > 0 ? dot / math.sqrt(a2 * b2) : 0;
+  }
+
+  Future<void> _playChime() async {
+    _playingChime = true;
     try {
-      final wav = _makeSuccessWav();
-      await _successPlayer.stop();
-      await _successPlayer.play(BytesSource(wav));
-    } catch (_) {
-      // Chime is feedback only; never stop tuning if audio playback fails.
-    } finally {
-      await Future<void>.delayed(const Duration(milliseconds: 350));
-      _playingSuccess = false;
+      await _chime.stop();
+      await _chime.play(BytesSource(_makeWav()));
+    } catch (_) {} finally {
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+      _playingChime = false;
     }
   }
 
-  Uint8List _makeSuccessWav() {
-    const sampleRate = 44100;
-    const durationMs = 280;
-    const count = sampleRate * durationMs ~/ 1000;
+  Uint8List _makeWav() {
+    const rate = 44100, ms = 280;
+    final count = rate * ms ~/ 1000;
     final pcm = Int16List(count);
-
-    for (int i = 0; i < count; i++) {
-      final t = i / sampleRate;
-      final attack = math.min(1.0, t / 0.012);
-      final release = math.min(1.0, (durationMs / 1000 - t) / 0.09);
-      final envelope = math.max(0.0, math.min(attack, release));
-      final first = math.sin(2 * math.pi * 880 * t);
-      final second =
-          math.sin(2 * math.pi * 1320 * t) * (0.65 * math.min(1, t / 0.04));
-      pcm[i] = ((first + second) * 0.22 * envelope * 32767).round();
+    for (var i = 0; i < count; i++) {
+      final t = i / rate;
+      final attack = math.min(1.0, t / .012);
+      final release = math.min(1.0, (ms / 1000 - t) / .09);
+      final env = math.max(0.0, math.min(attack, release));
+      final tone = math.sin(2 * math.pi * 880 * t) + math.sin(2 * math.pi * 1320 * t) * .65;
+      pcm[i] = (tone * .22 * env * 32767).round();
     }
-
     final dataSize = pcm.length * 2;
-    final buffer = ByteData(44 + dataSize);
-
-    void writeAscii(int offset, String value) {
-      for (int i = 0; i < value.length; i++) {
-        buffer.setUint8(offset + i, value.codeUnitAt(i));
-      }
+    final b = ByteData(44 + dataSize);
+    void text(int at, String value) {
+      for (var i = 0; i < value.length; i++) b.setUint8(at + i, value.codeUnitAt(i));
     }
+    text(0, 'RIFF'); b.setUint32(4, 36 + dataSize, Endian.little);
+    text(8, 'WAVE'); text(12, 'fmt '); b.setUint32(16, 16, Endian.little);
+    b.setUint16(20, 1, Endian.little); b.setUint16(22, 1, Endian.little);
+    b.setUint32(24, rate, Endian.little); b.setUint32(28, rate * 2, Endian.little);
+    b.setUint16(32, 2, Endian.little); b.setUint16(34, 16, Endian.little);
+    text(36, 'data'); b.setUint32(40, dataSize, Endian.little);
+    for (var i = 0; i < pcm.length; i++) b.setInt16(44 + i * 2, pcm[i], Endian.little);
+    return b.buffer.asUint8List();
+  }
 
-    writeAscii(0, 'RIFF');
-    buffer.setUint32(4, 36 + dataSize, Endian.little);
-    writeAscii(8, 'WAVE');
-    writeAscii(12, 'fmt ');
-    buffer.setUint32(16, 16, Endian.little);
-    buffer.setUint16(20, 1, Endian.little);
-    buffer.setUint16(22, 1, Endian.little);
-    buffer.setUint32(24, sampleRate, Endian.little);
-    buffer.setUint32(28, sampleRate * 2, Endian.little);
-    buffer.setUint16(32, 2, Endian.little);
-    buffer.setUint16(34, 16, Endian.little);
-    writeAscii(36, 'data');
-    buffer.setUint32(40, dataSize, Endian.little);
-    for (int i = 0; i < pcm.length; i++) {
-      buffer.setInt16(44 + i * 2, pcm[i], Endian.little);
-    }
-    return buffer.buffer.asUint8List();
+  Color get _tuningColor {
+    if (!_hasSignal) return Colors.white70;
+    if (_verified || _cents.abs() <= 5) return _green;
+    if (_cents.abs() <= 20) return _amber;
+    return _red;
+  }
+
+  void _select(int index) {
+    setState(() {
+      _selected = index;
+      _detected = index;
+      _verified = false;
+      _verifyTarget = -1;
+      _verifyFrames = 0;
+      _smoothedFrequency = 0;
+    });
+  }
+
+  void _reset() {
+    setState(() {
+      _tuned.clear();
+      _selected = 5; _detected = 5;
+      _verified = false; _hasSignal = false;
+      _frequency = 0; _cents = 0; _confidence = 0;
+      _verifyTarget = -1; _verifyFrames = 0;
+      _smoothedFrequency = 0; _samples.clear();
+    });
   }
 
   @override
   Widget build(BuildContext context) {
-    final selected = _strings[_selectedString];
-    final detected = _strings[_detectedString];
-    final statusColor = !_hasSignal
-        ? _TunerColors.muted
-        : _inTune
-            ? _TunerColors.green
-            : _TunerColors.text;
-
-    final status = !_hasSignal
-        ? 'PLAY A STRING'
-        : _inTune
-            ? 'IN TUNE'
-            : detected.number == selected.number
-                ? (_cents < 0 ? 'TUNE UP' : 'TUNE DOWN')
-                : 'WRONG STRING';
+    final selected = _targets[_selected];
+    final detected = _targets[_detected];
+    final color = _tuningColor;
+    final wrong = _hasSignal && _detected != _selected;
 
     return Material(
-      color: _TunerColors.background,
+      color: _bg,
       child: SafeArea(
         child: Padding(
           padding: const EdgeInsets.fromLTRB(18, 12, 18, 16),
-          child: Column(
-            children: [
-              Row(
-                children: [
-                  if (!widget.embedded)
-                    IconButton(
-                      onPressed: widget.onClose ?? () => Navigator.maybePop(context),
-                      icon: const Icon(Icons.close_rounded),
-                      color: Colors.white70,
-                    )
-                  else
-                    const SizedBox(width: 48),
-                  const Expanded(
-                    child: Text(
-                      'Guitar Tuner',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        color: _TunerColors.text,
-                        fontSize: 22,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                  ),
-                  IconButton(
-                    onPressed: _listening ? _stopListening : _startListening,
-                    icon: Icon(
-                      _listening ? Icons.mic_rounded : Icons.mic_off_rounded,
-                      color: _listening ? _TunerColors.green : _TunerColors.muted,
-                    ),
-                  ),
-                ],
+          child: Column(children: [
+            Row(children: [
+              if (!widget.embedded)
+                IconButton(onPressed: widget.onClose ?? () => Navigator.maybePop(context), icon: const Icon(Icons.close_rounded, color: Colors.white70))
+              else const SizedBox(width: 48),
+              const Expanded(child: Text('Guitar Tuner', textAlign: TextAlign.center, style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.w800))),
+              IconButton(onPressed: _reset, icon: const Icon(Icons.restart_alt_rounded, color: Colors.white70)),
+              IconButton(onPressed: _toggle, icon: Icon(_listening ? Icons.mic_rounded : Icons.mic_off_rounded, color: color)),
+            ]),
+            const Align(alignment: Alignment.centerLeft, child: Text('Play a string and tune to the center', style: TextStyle(color: Colors.white54, fontSize: 14))),
+            const SizedBox(height: 12),
+            Row(children: [
+              Expanded(child: _Info('TARGET', '${selected.note}${selected.number}')),
+              const SizedBox(width: 8),
+              Expanded(child: _Info('DETECTED', _hasSignal ? '${detected.note}${detected.number}' : '—')),
+            ]),
+            const SizedBox(height: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 9),
+              decoration: BoxDecoration(color: _verified ? _green.withOpacity(.12) : _card, borderRadius: BorderRadius.circular(24), border: Border.all(color: _verified ? _green : _border)),
+              child: Text(_verified ? '✓  IN TUNE' : wrong ? 'WRONG STRING' : _hasSignal ? 'TUNE TO CENTER' : 'PLAY A STRING', style: TextStyle(color: color, fontWeight: FontWeight.w800, letterSpacing: 1)),
+            ),
+            const SizedBox(height: 4),
+            Expanded(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+              AnimatedBuilder(
+                animation: _animation,
+                builder: (_, __) => SizedBox(height: 170, width: double.infinity, child: CustomPaint(painter: _Wave(cents: _cents, active: _hasSignal, verified: _verified, phase: _animation.value))),
               ),
-              const SizedBox(height: 10),
-              Row(
-                children: [
-                  Expanded(
-                    child: _InfoChip(
-                      label: 'TARGET',
-                      value: '${selected.note} ${selected.number}',
-                    ),
+              Text(_hasSignal ? detected.note : '—', style: TextStyle(color: color, fontSize: 82, height: .88, fontWeight: FontWeight.w900)),
+              Text(_hasSignal ? '${_frequency.toStringAsFixed(1)} Hz' : 'Listening…', style: const TextStyle(color: Colors.white70, fontSize: 17, fontWeight: FontWeight.w600)),
+              const SizedBox(height: 5),
+              Text(_hasSignal ? '${_cents >= 0 ? '+' : ''}${_cents.toStringAsFixed(1)} cents' : 'Tune until the center is reached', style: TextStyle(color: color, fontSize: 19, fontWeight: FontWeight.w800)),
+            ])),
+            SizedBox(height: 72, width: double.infinity, child: CustomPaint(painter: _Ruler(_cents, _hasSignal, _verified))),
+            const SizedBox(height: 10),
+            Row(children: List.generate(_targets.length, (i) {
+              final selectedCard = i == _selected;
+              final tuned = _tuned.contains(i);
+              return Expanded(child: Padding(
+                padding: EdgeInsets.only(left: i == 0 ? 0 : 3, right: i == 5 ? 0 : 3),
+                child: GestureDetector(onTap: () => _select(i), child: Stack(clipBehavior: Clip.none, children: [
+                  AnimatedContainer(
+                    duration: const Duration(milliseconds: 180), height: 78,
+                    decoration: BoxDecoration(color: tuned ? _green.withOpacity(.12) : _card, borderRadius: BorderRadius.circular(16), border: Border.all(color: tuned ? _green : selectedCard ? _green : _border, width: tuned || selectedCard ? 1.7 : 1)),
+                    child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+                      Text(_targets[i].note, style: TextStyle(color: tuned ? _green : Colors.white, fontSize: 23, fontWeight: FontWeight.w900)),
+                      Text('${_targets[i].number}', style: const TextStyle(color: Colors.white38, fontSize: 11)),
+                    ]),
                   ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: _InfoChip(
-                      label: 'DETECTED',
-                      value: _hasSignal ? '${detected.note} ${detected.number}' : '—',
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 14),
-              Expanded(
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    AnimatedBuilder(
-                      animation: _waveController,
-                      builder: (context, child) => CustomPaint(
-                        size: const Size(double.infinity, 100),
-                        painter: _TunerWavePainter(
-                          cents: _cents,
-                          active: _hasSignal,
-                          inTune: _inTune,
-                          phase: _waveController.value,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 6),
-                    Text(
-                      _hasSignal ? detected.note : '—',
-                      style: TextStyle(
-                        color: statusColor,
-                        fontSize: 84,
-                        height: .95,
-                        fontWeight: FontWeight.w900,
-                      ),
-                    ),
-                    Text(
-                      _hasSignal ? '${_frequency.toStringAsFixed(1)} Hz' : '— Hz',
-                      style: const TextStyle(
-                        color: _TunerColors.muted,
-                        fontSize: 16,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      _hasSignal
-                          ? '${_cents >= 0 ? '+' : ''}${_cents.toStringAsFixed(1)} cents'
-                          : '— cents',
-                      style: TextStyle(
-                        color: statusColor,
-                        fontSize: 19,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                    const SizedBox(height: 5),
-                    Text(
-                      status,
-                      style: TextStyle(
-                        color: statusColor,
-                        fontSize: 14,
-                        fontWeight: FontWeight.w800,
-                        letterSpacing: 1.5,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              _buildCentsRuler(),
-              const SizedBox(height: 8),
-              _buildStringSelector(),
-              const SizedBox(height: 8),
-              Text(
-                _inTune
-                    ? 'Verified target • ±5 cents • chime played'
-                    : 'Tap a string, then pluck and hold it near the microphone.',
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  color: _inTune ? _TunerColors.green : _TunerColors.muted,
-                  fontSize: 13,
-                  height: 1.35,
-                ),
-              ),
+                  if (tuned) Positioned(right: -4, top: -7, child: Container(width: 24, height: 24, decoration: const BoxDecoration(color: _green, shape: BoxShape.circle), child: const Icon(Icons.check_rounded, color: _bg, size: 16))),
+                ])),
+              ));
+            })),
+            const SizedBox(height: 8),
+            Text(_verified ? 'Verified • ±5 cents • chime played' : 'Green center is the tuning target • small ±5 cent tolerance', style: TextStyle(color: _verified ? _green : Colors.white38, fontSize: 13, fontWeight: FontWeight.w600)),
+            if (_confidence > 0) ...[
+              const SizedBox(height: 3),
+              Text('Signal ${(100 * _confidence).clamp(0, 100).toStringAsFixed(0)}%', style: const TextStyle(color: Colors.white24, fontSize: 11)),
             ],
-          ),
+          ]),
         ),
       ),
     );
-  }
-
-  Widget _buildCentsRuler() {
-    return SizedBox(
-      height: 76,
-      child: CustomPaint(
-        painter: _CentsRulerPainter(
-          cents: _cents,
-          active: _hasSignal,
-          inTune: _inTune,
-        ),
-        child: const SizedBox.expand(),
-      ),
-    );
-  }
-
-  Widget _buildStringSelector() {
-    return Row(
-      children: List.generate(_strings.length, (index) {
-        final string = _strings[index];
-        final selected = index == _selectedString;
-        final tuned = _tunedStrings.contains(index);
-        return Expanded(
-          child: Padding(
-            padding: EdgeInsets.only(
-              left: index == 0 ? 0 : 4,
-              right: index == _strings.length - 1 ? 0 : 4,
-            ),
-            child: _StringTile(
-              string: string,
-              selected: selected,
-              tuned: tuned,
-              onTap: () => _selectString(index),
-            ),
-          ),
-        );
-      }),
-    );
-  }
-
-  void _selectString(int index) {
-    if (_selectedString == index) return;
-    setState(() {
-      _selectedString = index;
-      _detectedString = index;
-      _inTune = false;
-      _lastInTune = false;
-      _smoothedFrequency = 0;
-      _smoothedCents = 0;
-      _verificationString = -1;
-      _verificationFrames = 0;
-    });
   }
 }
 
-class _InfoChip extends StatelessWidget {
-  const _InfoChip({required this.label, required this.value});
+class _Info extends StatelessWidget {
+  const _Info(this.label, this.value);
   final String label;
   final String value;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
-      decoration: BoxDecoration(
-        color: _TunerColors.card,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: _TunerColors.cardBorder),
-      ),
-      child: Column(
-        children: [
-          Text(label, style: const TextStyle(color: _TunerColors.dim, fontSize: 10, fontWeight: FontWeight.w800, letterSpacing: 1.1)),
-          const SizedBox(height: 2),
-          Text(value, style: const TextStyle(color: _TunerColors.text, fontSize: 14, fontWeight: FontWeight.w800)),
-        ],
-      ),
-    );
-  }
+  @override Widget build(BuildContext context) => Container(
+    padding: const EdgeInsets.symmetric(vertical: 8),
+    decoration: BoxDecoration(color: _card, borderRadius: BorderRadius.circular(13), border: Border.all(color: _border)),
+    child: Column(children: [
+      Text(label, style: const TextStyle(color: Colors.white30, fontSize: 9, fontWeight: FontWeight.w800, letterSpacing: 1)),
+      const SizedBox(height: 2),
+      Text(value, style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w800)),
+    ]),
+  );
 }
 
-class _StringTile extends StatelessWidget {
-  const _StringTile({required this.string, required this.selected, required this.tuned, required this.onTap});
-  final _TuningString string;
-  final bool selected;
-  final bool tuned;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final borderColor = tuned
-        ? _TunerColors.green
-        : selected
-            ? _TunerColors.green.withOpacity(0.8)
-            : _TunerColors.cardBorder;
-    final background = tuned
-        ? _TunerColors.greenDark.withOpacity(0.55)
-        : _TunerColors.card;
-
-    return GestureDetector(
-      onTap: onTap,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 220),
-        height: 82,
-        decoration: BoxDecoration(
-          color: background,
-          borderRadius: BorderRadius.circular(18),
-          border: Border.all(color: borderColor, width: tuned || selected ? 1.7 : 1.0),
-          boxShadow: tuned
-              ? [BoxShadow(color: _TunerColors.green.withOpacity(0.22), blurRadius: 16, spreadRadius: 1)]
-              : null,
-        ),
-        child: Stack(
-          clipBehavior: Clip.none,
-          alignment: Alignment.center,
-          children: [
-            Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Text(
-                  string.note,
-                  style: TextStyle(
-                    color: tuned
-                        ? _TunerColors.green
-                        : selected
-                            ? _TunerColors.text
-                            : _TunerColors.muted,
-                    fontSize: 24,
-                    fontWeight: FontWeight.w900,
-                  ),
-                ),
-                Text('${string.number}', style: const TextStyle(color: _TunerColors.dim, fontSize: 11, fontWeight: FontWeight.w700)),
-              ],
-            ),
-            if (tuned)
-              Positioned(
-                right: -5,
-                top: -5,
-                child: Container(
-                  width: 25,
-                  height: 25,
-                  decoration: const BoxDecoration(color: _TunerColors.green, shape: BoxShape.circle),
-                  child: const Icon(Icons.check_rounded, color: _TunerColors.background, size: 18),
-                ),
-              ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _TunerWavePainter extends CustomPainter {
-  _TunerWavePainter({required this.cents, required this.active, required this.inTune, required this.phase});
+class _Wave extends CustomPainter {
+  const _Wave({required this.cents, required this.active, required this.verified, required this.phase});
   final double cents;
   final bool active;
-  final bool inTune;
+  final bool verified;
   final double phase;
 
   @override
   void paint(Canvas canvas, Size size) {
-    final centerX = size.width / 2;
-    final centerY = size.height / 2;
-    final glowPaint = Paint()
-      ..color = inTune ? _TunerColors.green.withOpacity(0.12) : _TunerColors.green.withOpacity(0.04)
-      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 26);
-    if (active) canvas.drawCircle(Offset(centerX, centerY), 65, glowPaint);
+    final cx = size.width / 2;
+    final cy = size.height / 2;
+    final distance = active ? cents.abs().clamp(0.0, 50.0) : 50.0;
+    final proximity = active ? 1.0 - distance / 50.0 : 0.0;
+    final color = !active ? Colors.white54 : verified || distance <= 5 ? _green : distance <= 20 ? _amber : _red;
 
-    final linePaint = Paint()
-      ..strokeWidth = 3
-      ..strokeCap = StrokeCap.round
-      ..color = inTune ? _TunerColors.green : _TunerColors.muted;
-    canvas.drawLine(Offset(centerX, 14), Offset(centerX, size.height - 10), linePaint);
+    // As the pitch approaches the exact target, the center grows and the
+    // whole wave transitions red -> amber -> green.
+    final centerRadius = 12 + proximity * 11;
+    final glowRadius = 35 + proximity * 55;
+    if (active) canvas.drawCircle(Offset(cx, cy), glowRadius, Paint()..color = color.withOpacity(.05 + proximity * .10));
 
-    canvas.drawCircle(
-      Offset(centerX, centerY),
-      inTune ? 18 : 13,
-      Paint()..color = inTune ? _TunerColors.green : _TunerColors.text,
-    );
+    canvas.drawLine(Offset(cx, 8), Offset(cx, size.height - 8), Paint()..color = verified ? _green : color..strokeWidth = verified ? 4 : 3..strokeCap = StrokeCap.round);
+    canvas.drawCircle(Offset(cx, cy), centerRadius, Paint()..color = color);
 
-    const count = 17;
-    for (var i = 0; i < count; i++) {
-      final normalized = i / (count - 1);
-      final distance = (normalized - 0.5).abs() * 2;
-      final wave = active
-          ? math.sin((phase * math.pi * 2) + i * 0.45) * (1 - distance * 0.45)
-          : 0.0;
-      final height = active ? 28 + wave * (92 * (1 - normalized * 0.42)) : 16.0;
-      final x = 12 + normalized * (size.width - 24);
-      final paint = Paint()
-        ..strokeWidth = 3
-        ..strokeCap = StrokeCap.round
-        ..color = inTune ? _TunerColors.green.withOpacity(0.75) : _TunerColors.muted.withOpacity(0.65);
-      canvas.drawLine(Offset(x, centerY - height / 2), Offset(x, centerY + height / 2), paint);
+    const bars = 17;
+    for (var i = 0; i < bars; i++) {
+      final normalized = i / (bars - 1);
+      final side = (normalized - .5).abs() * 2;
+      final distanceFromCenter = 1 - side;
+      final pulse = math.sin(phase * math.pi * 2 + i * .72).abs();
+      final height = active ? 22 + pulse * (38 + proximity * 60) * (.55 + distanceFromCenter * .45) : 16 + distanceFromCenter * 12;
+      final x = 10 + normalized * (size.width - 20);
+      final barColor = active ? color.withOpacity(.45 + distanceFromCenter * .45) : Colors.white54;
+      canvas.drawLine(Offset(x, cy - height / 2), Offset(x, cy + height / 2), Paint()..color = barColor..strokeWidth = 4..strokeCap = StrokeCap.round);
     }
   }
 
-  @override
-  bool shouldRepaint(covariant _TunerWavePainter oldDelegate) =>
-      oldDelegate.cents != cents || oldDelegate.active != active || oldDelegate.inTune != inTune || oldDelegate.phase != phase;
+  @override bool shouldRepaint(covariant _Wave old) => old.cents != cents || old.active != active || old.verified != verified || old.phase != phase;
 }
 
-class _CentsRulerPainter extends CustomPainter {
-  _CentsRulerPainter({required this.cents, required this.active, required this.inTune});
+class _Ruler extends CustomPainter {
+  const _Ruler(this.cents, this.active, this.verified);
   final double cents;
   final bool active;
-  final bool inTune;
+  final bool verified;
 
   @override
   void paint(Canvas canvas, Size size) {
-    final centerY = size.height * 0.55;
-    final left = 16.0;
-    final right = size.width - 16.0;
-    final width = right - left;
-    final base = Paint()..color = _TunerColors.cardBorder..strokeWidth = 2..strokeCap = StrokeCap.round;
-    canvas.drawLine(Offset(left, centerY), Offset(right, centerY), base);
-
-    final greenZone = Paint()
-      ..color = _TunerColors.green.withOpacity(0.18)
-      ..strokeWidth = 9
-      ..strokeCap = StrokeCap.round;
-    canvas.drawLine(Offset(_x(left, width, -5), centerY), Offset(_x(left, width, 5), centerY), greenZone);
-
-    for (var i = -5; i <= 5; i++) {
-      final x = _x(left, width, i * 10.0);
-      final tickHeight = i == 0 ? 20.0 : 11.0;
-      final tickPaint = Paint()
-        ..color = i == 0 ? _TunerColors.text : _TunerColors.dim
-        ..strokeWidth = i == 0 ? 2.4 : 1.4;
-      canvas.drawLine(Offset(x, centerY - tickHeight / 2), Offset(x, centerY + tickHeight / 2), tickPaint);
+    const green = _green;
+    const red = _red;
+    const amber = _amber;
+    const y = 31.0;
+    for (var i = 0; i < 25; i++) {
+      final value = -50 + i * 100 / 24;
+      final x = (value + 50) / 100 * size.width;
+      final c = value.abs() <= 5 ? green : value.abs() <= 20 ? amber : red;
+      canvas.drawLine(Offset(x, y - (i.isEven ? 16 : 10)), Offset(x, y + (i.isEven ? 16 : 10)), Paint()..color = c.withOpacity(active ? 1 : .5)..strokeWidth = i.isEven ? 3 : 2);
     }
-
-    final markerCents = active ? cents.clamp(-50.0, 50.0) : 0.0;
-    final markerX = _x(left, width, markerCents);
-    final markerPaint = Paint()
-      ..color = inTune ? _TunerColors.green : _TunerColors.text
-      ..strokeWidth = 4
-      ..strokeCap = StrokeCap.round;
-    canvas.drawLine(Offset(markerX, centerY - 17), Offset(markerX, centerY + 17), markerPaint);
-
-    const style = TextStyle(color: _TunerColors.dim, fontSize: 10, fontWeight: FontWeight.w700);
-    _drawText(canvas, '-50', Offset(left, size.height - 5), style);
-    _drawText(canvas, '0', Offset(size.width / 2, size.height - 5), style);
-    _drawText(canvas, '+50', Offset(right, size.height - 5), style);
+    final value = active ? cents.clamp(-50.0, 50.0) : 0.0;
+    final x = (value + 50) / 100 * size.width;
+    final marker = Paint()..color = verified ? green : Colors.white70..strokeWidth = 3.5;
+    marker.strokeWidth = 3.5;
+    canvas.drawLine(Offset(x, 3), Offset(x, 58), marker);
+    final text = const TextStyle(color: Colors.white54, fontSize: 11);
+    _label(canvas, '-50', 0, 62, text, TextAlign.left);
+    _label(canvas, '0', size.width / 2, 62, text, TextAlign.center);
+    _label(canvas, '+50', size.width, 62, text, TextAlign.right);
   }
 
-  double _x(double left, double width, double centsValue) {
-    final normalized = (centsValue + 50) / 100;
-    return left + normalized.clamp(0.0, 1.0) * width;
+  void _label(Canvas canvas, String value, double x, double y, TextStyle style, TextAlign align) {
+    final p = TextPainter(text: TextSpan(text: value, style: style), textDirection: TextDirection.ltr)..layout();
+    final dx = align == TextAlign.left ? x : align == TextAlign.right ? x - p.width : x - p.width / 2;
+    p.paint(canvas, Offset(dx, y));
   }
 
-  void _drawText(Canvas canvas, String text, Offset center, TextStyle style) {
-    final tp = TextPainter(text: TextSpan(text: text, style: style), textDirection: TextDirection.ltr)..layout();
-    tp.paint(canvas, Offset(center.dx - tp.width / 2, center.dy - tp.height));
-  }
-
-  @override
-  bool shouldRepaint(covariant _CentsRulerPainter oldDelegate) =>
-      oldDelegate.cents != cents || oldDelegate.active != active || oldDelegate.inTune != inTune;
+  @override bool shouldRepaint(covariant _Ruler old) => old.cents != cents || old.active != active || old.verified != verified;
 }
