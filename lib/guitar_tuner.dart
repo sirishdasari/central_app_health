@@ -173,22 +173,7 @@ class _TunerState extends State<GuitarTunerSheet> with SingleTickerProviderState
     _samples.clear();
     if(mounted)setState((){});
   }
-  Future<void> _chime() async{
-    // Do not wait for playback on the microphone/pitch callback path.
-    // Waiting here can make the tuner appear frozen immediately after a
-    // successful note.
-    try{
-      await _p.stop();
-      await _p.play(BytesSource(_wav()),volume:.65);
-    }catch(_){}
-  }
 
-  Uint8List _wav(){const sr=44100,n=13230;final b=ByteData(44+n*2);void s(int o,String v){for(var i=0;i<v.length;i++)b.setUint8(o+i,v.codeUnitAt(i));}
-    s(0,'RIFF');b.setUint32(4,36+n*2,Endian.little);s(8,'WAVE');s(12,'fmt ');b.setUint32(16,16,Endian.little);b.setUint16(20,1,Endian.little);b.setUint16(22,1,Endian.little);
-    b.setUint32(24,sr,Endian.little);b.setUint32(28,sr*2,Endian.little);b.setUint16(32,2,Endian.little);b.setUint16(34,16,Endian.little);s(36,'data');b.setUint32(40,n*2,Endian.little);
-    for(var i=0;i<n;i++){final t=i/sr,e=math.min(1,t/.015)*math.max(0,math.min(1,(.30-t)/.08));final v=(math.sin(2*math.pi*659.25*t)+.65*math.sin(2*math.pi*987.77*t))*e*.22;b.setInt16(44+i*2,(v*32767).round(),Endian.little);}
-    return b.buffer.asUint8List();
-  }
   Color get ac=>!has?Colors.white54:ok?const Color(0xFF19F59A):cents.abs()<=20?const Color(0xFFFFC33D):const Color(0xFFFF6E6E);
   @override Widget build(BuildContext c){
     final bg=const Color(0xFF06151D);
