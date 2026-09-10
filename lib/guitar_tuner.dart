@@ -116,7 +116,7 @@ class _Wave extends CustomPainter{
     x.drawLine(Offset(cx,10),Offset(cx,s.height-8),Paint()..color=ok?const Color(0xFF19F59A):Colors.white54..strokeWidth=3..strokeCap=StrokeCap.round);
     x.drawCircle(Offset(cx,cy),ok?18:13,Paint()..color=ok?const Color(0xFF19F59A):Colors.white70);
     for(var i=0;i<17;i++){final d=22+i*16.0,n=d/278,w=has?math.sin(i*.85+p*math.pi*2+c*.035).abs():.08,h=has?28+w*(92*(1-n*.42)):12+(1-n)*8;
-      final q=Paint()..color=(ok?const Color(0xFF19F59A):Colors.white54).withOpacity(has?.28+(1-n)*.72:.2)..strokeWidth=4..strokeCap=StrokeCap.round;
+      final q=Paint()..color=(ok?const Color(0xFF19F59A):Colors.white54).withOpacity(has ? .28 + (1 - n) * .72 : .2)..strokeWidth=4..strokeCap=StrokeCap.round;
       x.drawLine(Offset(cx-d,cy-h/2),Offset(cx-d,cy+h/2),q);x.drawLine(Offset(cx+d,cy-h/2),Offset(cx+d,cy+h/2),q);}
   }
   @override bool shouldRepaint(covariant _Wave o)=>o.c!=c||o.has!=has||o.ok!=ok||o.p!=p;
