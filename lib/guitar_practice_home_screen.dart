@@ -1,10 +1,12 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import 'guitar_practice_api.dart';
 import 'guitar_practice_session_screen.dart';
+import 'guitar_practice_streak.dart';
 import 'smart_guitar_ble.dart';
 
 class GuitarPracticeHomeScreen extends StatefulWidget {
@@ -15,8 +17,10 @@ class GuitarPracticeHomeScreen extends StatefulWidget {
 
 class _GuitarPracticeHomeScreenState extends State<GuitarPracticeHomeScreen> {
   final api = GuitarPracticeApi();
+  final streakService = GuitarPracticeStreak();
   GuitarPracticeResponse? data;
   bool loading = true, syncing = false, connected = false, completedOpen = false;
+  int streak = 0;
   String selectedLevel = 'All';
   String selectedCategory = 'All';
   StreamSubscription<String>? bleSub;
@@ -43,11 +47,35 @@ class _GuitarPracticeHomeScreenState extends State<GuitarPracticeHomeScreen> {
     super.dispose();
   }
 
+  String _todayKey() {
+    final now = DateTime.now();
+    return '${now.year.toString().padLeft(4, '0')}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
+  }
+
+  Future<void> _ensureToday() async {
+    final prefs = await SharedPreferences.getInstance();
+    const key = 'guitar_daily_counter_date';
+    final today = _todayKey();
+    final lastDate = prefs.getString(key);
+    if (lastDate == null) {
+      // First install: preserve whatever is already today's Appwrite value.
+      await prefs.setString(key, today);
+    } else if (lastDate != today) {
+      await api.resetDailyPracticeTime();
+      await prefs.setString(key, today);
+    }
+  }
+
   Future<void> _load() async {
     if (mounted) setState(() => loading = true);
     try {
+      await _ensureToday();
       final r = await api.list();
-      if (mounted) setState(() => data = r);
+      final s = await streakService.updateForToday(r.dailyPracticeTime);
+      if (mounted) setState(() {
+        data = r;
+        streak = s;
+      });
     } catch (e) {
       if (mounted) _msg('Load failed: $e');
     } finally {
@@ -104,7 +132,7 @@ class _GuitarPracticeHomeScreenState extends State<GuitarPracticeHomeScreen> {
 
   Future<void> _toggle(GuitarPractice p) async {
     try {
-      await api.update(p.id, {'completed': !p.completed});
+      await api.setCompleted(p.id, !p.completed);
       await _load();
     } catch (e) {
       if (mounted) _msg('Update failed: $e');
@@ -150,7 +178,7 @@ class _GuitarPracticeHomeScreenState extends State<GuitarPracticeHomeScreen> {
     }
   }
 
-  int get _todayMinutes => (data?.practices ?? const <GuitarPractice>[]).fold<int>(0, (sum, p) => sum + p.dailyPracticeTime);
+  int get _todayMinutes => data?.dailyPracticeTime ?? 0;
 
   List<GuitarPractice> _filtered(List<GuitarPractice> source) => source.where((p) {
         final levelOk = selectedLevel == 'All' || p.level == selectedLevel;
@@ -163,7 +191,7 @@ class _GuitarPracticeHomeScreenState extends State<GuitarPracticeHomeScreen> {
     return ['All', ...values];
   }
 
-  String _time(int minutes) => minutes < 60 ? '$minutes min' : '${minutes ~/ 60}h ${minutes % 60}m';
+  String _time(int minutes) => '${(minutes ~/ 60).toString().padLeft(2, '0')}:${(minutes % 60).toString().padLeft(2, '0')}';
 
   void _msg(String s) {
     if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(s)));
@@ -247,12 +275,10 @@ class _GuitarPracticeHomeScreenState extends State<GuitarPracticeHomeScreen> {
         const SizedBox(width: 8),
         Expanded(child: _stat(Icons.check_circle_rounded, '${data?.practices.where((p) => p.completed).length ?? 0}', 'Completed')),
         const SizedBox(width: 8),
-        Expanded(child: _syncStat()),
+        Expanded(child: _stat(Icons.local_fire_department_rounded, '$streak', 'Day Streak')),
       ]);
 
   Widget _stat(IconData icon, String value, String label) => Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12), decoration: BoxDecoration(color: card, borderRadius: BorderRadius.circular(18), border: Border.all(color: border)), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Icon(icon, color: green, size: 21), const SizedBox(height: 7), Text(value, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 16)), Text(label, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: muted, fontSize: 10))]));
-
-  Widget _syncStat() => Container(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8), decoration: BoxDecoration(color: card, borderRadius: BorderRadius.circular(18), border: Border.all(color: border)), child: Row(children: [Icon(connected ? Icons.bluetooth_connected : Icons.bluetooth_disabled, color: connected ? green : Colors.white54, size: 21), const SizedBox(width: 6), Expanded(child: TextButton(onPressed: syncing ? null : _sync, child: Text(syncing ? 'Syncing' : 'Sync', style: TextStyle(color: connected ? green : purple, fontWeight: FontWeight.w800))))]));
 
   Widget _chip(String text, {bool purple = false}) {
     return Container(padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4), decoration: BoxDecoration(color: (purple ? const Color(0xFFC9A7FF) : green).withAlpha(28), borderRadius: BorderRadius.circular(20)), child: Text(text, style: TextStyle(color: purple ? const Color(0xFFC9A7FF) : green, fontSize: 11, fontWeight: FontWeight.w700)));
@@ -296,7 +322,6 @@ class _Editor extends StatefulWidget {
 class _EditorState extends State<_Editor> {
   late final title = TextEditingController(text: widget.item?.title ?? '');
   late final time = TextEditingController(text: widget.item?.suggestedTime ?? '');
-  late final dailyPracticeTime = TextEditingController(text: widget.item?.dailyPracticeTime.toString() ?? '0');
   late final description = TextEditingController(text: widget.item?.description ?? '');
   late final link = TextEditingController(text: widget.item?.link ?? '');
   late final category = TextEditingController(text: widget.item?.category ?? '');
@@ -305,7 +330,7 @@ class _EditorState extends State<_Editor> {
 
   @override
   void dispose() {
-    title.dispose(); time.dispose(); dailyPracticeTime.dispose(); description.dispose(); link.dispose(); category.dispose();
+    title.dispose(); time.dispose(); description.dispose(); link.dispose(); category.dispose();
     super.dispose();
   }
 
@@ -313,11 +338,18 @@ class _EditorState extends State<_Editor> {
 
   void _save() {
     final t = title.text.trim();
-    final daily = int.tryParse(dailyPracticeTime.text.trim());
     if (t.isEmpty) return _msg('Enter a practice title');
-    if (daily == null || daily < 0) return _msg('Enter a valid daily practice time');
     if (level.isEmpty) return _msg('Select a difficulty level');
-    Navigator.pop(context, {'title': t, 'suggestedTime': time.text.trim(), 'description': description.text.trim(), 'dailyPracticeTime': daily, 'category': category.text.trim(), 'level': level, 'link': link.text.trim(), 'completed': widget.item?.completed ?? false});
+    final result = <String, dynamic>{
+      'title': t,
+      'suggestedTime': time.text.trim(),
+      'description': description.text.trim(),
+      'category': category.text.trim(),
+      'level': level,
+      'link': link.text.trim(),
+    };
+    if (widget.item == null) result['completed'] = false;
+    Navigator.pop(context, result);
   }
 
   void _msg(String s) => ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(s)));
@@ -335,8 +367,6 @@ class _EditorState extends State<_Editor> {
       DropdownButtonFormField<String>(value: level.isEmpty ? null : level, decoration: _dec('Difficulty level', Icons.signal_cellular_alt_rounded), dropdownColor: const Color(0xFF142B35), items: levels.map((v) => DropdownMenuItem(value: v, child: Text(v))).toList(), onChanged: (v) => setState(() => level = v ?? '')),
       const SizedBox(height: 10),
       TextField(controller: time, decoration: _dec('Suggested time (HH:mm)', Icons.schedule), style: const TextStyle(color: Colors.white)),
-      const SizedBox(height: 10),
-      TextField(controller: dailyPracticeTime, keyboardType: TextInputType.number, decoration: _dec('Practice time (minutes)', Icons.timer_outlined), style: const TextStyle(color: Colors.white)),
       const SizedBox(height: 10),
       TextField(controller: description, maxLines: 4, decoration: _dec('Description', Icons.notes), style: const TextStyle(color: Colors.white)),
       const SizedBox(height: 10),
