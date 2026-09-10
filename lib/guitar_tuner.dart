@@ -23,7 +23,6 @@ class _TunerState extends State<GuitarTunerSheet> with SingleTickerProviderState
   final _r=AudioRecorder(),_p=AudioPlayer(); StreamSubscription<Uint8List>? _sub;
   late final AnimationController _a; final Set<int> _done={};
   DateTime _lastNoteSwitch=DateTime.fromMillisecondsSinceEpoch(0);
-  int _candidateIndex=-1,_candidateHits=0;
   bool listen=false,has=false,ok=false,lastOk=false,busy=false; int selected=5,detected=5;
   double hz=0,cents=0,level=0;
   @override void initState(){
@@ -36,51 +35,111 @@ class _TunerState extends State<GuitarTunerSheet> with SingleTickerProviderState
   Future<void> _start() async{
     if(!await _r.hasPermission()||!mounted)return;
     try{
-      final s=await _r.startStream(const RecordConfig(encoder:AudioEncoder.pcm16bits,sampleRate:44100,numChannels:1,autoGain:true,echoCancel:false,noiseSuppress:true));
+      final s=await _r.startStream(const RecordConfig(encoder:AudioEncoder.pcm16bits,sampleRate:44100,numChannels:1,autoGain:false,echoCancel:false,noiseSuppress:false));
       _sub=s.listen(_pcm,onError:(_){if(mounted)setState(()=>listen=false);}); if(mounted)setState(()=>listen=true);
     }catch(_){}
   }
   Future<void> _stop() async{
-    await _sub?.cancel();_sub=null;try{await _r.stop();}catch(_){}
+    await _sub?.cancel();_sub=null;_samples.clear();try{await _r.stop();}catch(_){}
     if(mounted)setState(()=>{listen=false,has=false,ok=false,hz=0,cents=0,level=0,lastOk=false});
   }
   void _pcm(Uint8List bytes){
-    if(bytes.length<4096)return; final x=Int16List(bytes.length~/2);final d=ByteData.sublistView(bytes);double m=0;
-    for(var i=0;i<x.length;i++){x[i]=d.getInt16(i*2,Endian.little);m+=x[i];}m/=x.length;double e=0;
-    for(final v in x){final z=v-m;e+=z*z;}final rms=math.sqrt(e/x.length);final lev=(rms/1800).clamp(0.0,1.0).toDouble();
-    if(rms<180){if(mounted)setState(()=>{has=false,ok=false,level=lev});return;}
-    final f=_pitch(x,m);if(f==null||f<70||f>370){if(mounted)setState(()=>{has=false,ok=false,level=lev});return;}
-    final near=_near(f);
-    // Always use the nearest standard-tuning note for automatic tracking.
-    // Require two consecutive frames before changing the selected string so
-    // brief noise/harmonics do not make the UI jump between strings.
-    if(near==_candidateIndex){
-      _candidateHits++;
+    // Keep a rolling 4096-sample window. The original tuner processed a
+    // stable window instead of trying to estimate pitch from each stream
+    // packet independently.
+    for(var i=0;i+1<bytes.length;i+=2){
+      final v=bytes[i]|(bytes[i+1]<<8);
+      _samples.add(v>32767?v-65536:v);
+    }
+    const n=4096;
+    if(_samples.length<n)return;
+    if(_samples.length>n*2)_samples.removeRange(0,_samples.length-n);
+
+    final p=_pitch(_samples);
+    if(p==null)return;
+
+    // The working tuner always maps the detected pitch to the nearest
+    // standard-tuning target. This is what makes A -> D -> G -> B etc.
+    // follow the string that was actually plucked.
+    final idx=_near(p.f);
+    final c=(1200*math.log(p.f/_ns[idx].f)/math.ln2).clamp(-50.0,50.0).toDouble();
+    final tuned=c.abs()<=5.0 && p.c>=.55;
+
+    if(tuned){
+      _done.add(idx);
+      if(!lastOk&&!busy){
+        lastOk=true;
+        unawaited(_chime());
+      }
     }else{
-      _candidateIndex=near;
-      _candidateHits=1;
+      lastOk=false;
     }
-    final now=DateTime.now();
-    if(near!=selected && _candidateHits>=2 &&
-        now.difference(_lastNoteSwitch).inMilliseconds>120){
-      selected=near;
-      _lastNoteSwitch=now;
-    }
-    final idx=near;
-    final c=1200*math.log(f/_ns[idx].f)/math.ln2, tuned=c.abs()<=5;
-    if(tuned){_done.add(idx);if(!lastOk&&!busy){lastOk=true;unawaited(_chime());}}else{lastOk=false;}
-    if(mounted)setState(()=>{has=true,level=lev,hz=f,cents=c,detected=idx,ok=tuned});
+
+    if(mounted)setState((){
+      selected=idx;
+      detected=idx;
+      has=true;
+      ok=tuned;
+      hz=p.f;
+      cents=c;
+      level=(p.c.clamp(0.0,1.0)).toDouble();
+    });
   }
-  double? _pitch(Int16List x,double m){
-    final n=x.length,min=(44100/370).floor(),max=math.min((44100/70).ceil(),n~/2);var best=-1;var bc=0.0;
-    for(var lag=min;lag<=max;lag+=2){double dot=0,a=0,b=0;for(var i=0;i<n-lag;i+=2){final u=x[i]-m,v=x[i+lag]-m;dot+=u*v;a+=u*u;b+=v*v;}if(a>0&&b>0){final q=dot/math.sqrt(a*b);if(q>bc){bc=q;best=lag;}}}
-    return best<0||bc<.35?null:44100/best;
+
+  final List<int> _samples=<int>[];
+
+  _P? _pitch(List<int> x){
+    final n=x.length;
+    var mean=0.0;
+    for(final v in x)mean+=v;
+    mean/=n;
+
+    var energy=0.0;
+    for(final v in x){final z=v-mean;energy+=z*z;}
+    if(math.sqrt(energy/n)<180)return null;
+
+    final minLag=(44100/500).round();
+    final maxLag=math.min((44100/70).round(),n~/2);
+    var best=0,bestC=0.0;
+
+    for(var lag=minLag;lag<=maxLag;lag++){
+      var dot=0.0,a2=0.0,b2=0.0;
+      for(var i=0;i<n-lag;i+=2){
+        final aa=x[i]-mean,bb=x[i+lag]-mean;
+        dot+=aa*bb;a2+=aa*aa;b2+=bb*bb;
+      }
+      if(a2>0&&b2>0){
+        final cc=dot/math.sqrt(a2*b2);
+        if(cc>bestC){bestC=cc;best=lag;}
+      }
+    }
+
+    // Keep the original working confidence gate.
+    if(best==0||bestC<.55)return null;
+
+    var lag=best.toDouble();
+    if(best>minLag&&best<maxLag){
+      final y1=_corr(x,best-1,mean),y2=_corr(x,best,mean),y3=_corr(x,best+1,mean);
+      final d=y1-2*y2+y3;
+      if(d.abs()>1e-9)lag+=.5*(y1-y3)/d;
+    }
+    return _P(44100/lag,bestC);
+  }
+
+  double _corr(List<int> x,int lag,double mean){
+    var dot=0.0,a2=0.0,b2=0.0;
+    for(var i=0;i<x.length-lag;i+=2){
+      final aa=x[i]-mean,bb=x[i+lag]-mean;
+      dot+=aa*bb;a2+=aa*aa;b2+=bb*bb;
+    }
+    return a2>0&&b2>0?dot/math.sqrt(a2*b2):0;
   }
   int _near(double f){var bi=0,be=1e9;for(var i=0;i<_ns.length;i++){final e=(1200*math.log(f/_ns[i].f)/math.ln2).abs();if(e<be){be=e;bi=i;}}return bi;}
   void _reset(){
     _done.clear();
     lastOk=false;
     busy=false;
+    _samples.clear();
     selected=5;
     detected=5;
     has=false;
@@ -89,8 +148,7 @@ class _TunerState extends State<GuitarTunerSheet> with SingleTickerProviderState
     cents=0;
     level=0;
     _lastNoteSwitch=DateTime.now();
-    _candidateIndex=-1;
-    _candidateHits=0;
+    _samples.clear();
     if(mounted)setState((){});
   }
   Future<void> _chime() async{
