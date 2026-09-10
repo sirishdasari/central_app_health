@@ -8,7 +8,6 @@ class GuitarPractice {
     required this.title,
     required this.completed,
     required this.suggestedTime,
-    required this.duration,
     required this.description,
     required this.dailyPracticeTime,
     required this.link,
@@ -20,7 +19,6 @@ class GuitarPractice {
   final String title;
   final bool completed;
   final String suggestedTime;
-  final int duration;
   final String description;
   final int dailyPracticeTime;
   final String link;
@@ -34,7 +32,6 @@ class GuitarPractice {
       title: data['sessionName']?.toString() ?? data['title']?.toString() ?? '',
       completed: data['completed'] == true,
       suggestedTime: data['suggestedTime']?.toString() ?? '',
-      duration: (data['duration'] as num?)?.toInt() ?? 0,
       description: data['description']?.toString() ?? '',
       dailyPracticeTime: (data['dailyPracticeTime'] as num?)?.toInt() ?? 0,
       link: data['link']?.toString() ?? '',
@@ -95,28 +92,61 @@ class GuitarPracticeApi {
         .map(GuitarPractice.fromDocument)
         .toList(growable: false);
 
+    // dailyPracticeTime is the accumulated practice time in minutes.
+    // It is now the source of today's practice total.
+    final total = practices.fold<int>(
+      0,
+      (sum, practice) => sum + practice.dailyPracticeTime,
+    );
+
     return GuitarPracticeResponse(
       date: _dateString(DateTime.now()),
-      dailyPracticeTime:
-          practices.isEmpty ? 0 : practices.first.dailyPracticeTime,
+      dailyPracticeTime: total,
       practices: practices,
     );
   }
 
-  Future<void> recordPractice(
+  Future<int> recordPractice(
     String id, {
     required int practicedSeconds,
-    required DateTime practiceDate,
   }) async {
     _validateConfig();
     if (id.trim().isEmpty) throw Exception('Practice id is empty');
     if (practicedSeconds <= 0) throw Exception('No practice time to record');
 
+    final document = await _databases.getDocument(
+      databaseId: AppwriteConfig.databaseId,
+      collectionId: collectionId,
+      documentId: id,
+    );
+
+    final current = (document.data['dailyPracticeTime'] as num?)?.toInt() ?? 0;
+    final addedMinutes = practicedSeconds ~/ 60;
+    if (addedMinutes <= 0) {
+      throw Exception('Practice less than one minute cannot be recorded yet');
+    }
+
+    final updated = current + addedMinutes;
+
     await _databases.updateDocument(
       databaseId: AppwriteConfig.databaseId,
       collectionId: collectionId,
       documentId: id,
-      data: {'completed': true},
+      data: {'dailyPracticeTime': updated},
+    );
+
+    // Deliberately do NOT update completed here.
+    return updated;
+  }
+
+  Future<void> setCompleted(String id, bool completed) async {
+    _validateConfig();
+    if (id.trim().isEmpty) throw Exception('Practice id is empty');
+    await _databases.updateDocument(
+      databaseId: AppwriteConfig.databaseId,
+      collectionId: collectionId,
+      documentId: id,
+      data: {'completed': completed},
     );
   }
 
@@ -135,7 +165,6 @@ class GuitarPracticeApi {
     if (id.trim().isEmpty) throw Exception('Practice id is empty');
     final data = _toAppwriteData(value);
     if (data.isEmpty) return;
-
     await _databases.updateDocument(
       databaseId: AppwriteConfig.databaseId,
       collectionId: collectionId,
@@ -156,38 +185,19 @@ class GuitarPracticeApi {
 
   Map<String, dynamic> _toAppwriteData(Map<String, dynamic> value) {
     final data = <String, dynamic>{};
-
-    if (value.containsKey('title')) {
-      data['sessionName'] = value['title']?.toString() ?? '';
+    if (value.containsKey('title')) data['sessionName'] = value['title']?.toString() ?? '';
+    if (value.containsKey('completed')) data['completed'] = value['completed'] == true;
+    if (value.containsKey('suggestedTime')) data['suggestedTime'] = value['suggestedTime']?.toString() ?? '';
+    if (value.containsKey('description')) data['description'] = value['description']?.toString() ?? '';
+    if (value.containsKey('dailyPracticeTime') && value['dailyPracticeTime'] is num) {
+      data['dailyPracticeTime'] = (value['dailyPracticeTime'] as num).toInt();
     }
-    if (value.containsKey('completed')) {
-      data['completed'] = value['completed'] == true;
-    }
-    if (value.containsKey('suggestedTime')) {
-      data['suggestedTime'] = value['suggestedTime']?.toString() ?? '';
-    }
-    if (value.containsKey('duration') && value['duration'] is num) {
-      data['duration'] = (value['duration'] as num).toInt();
-    }
-    if (value.containsKey('description')) {
-      data['description'] = value['description']?.toString() ?? '';
-    }
-    if (value.containsKey('dailyPracticeTime') &&
-        value['dailyPracticeTime'] is num) {
-      data['dailyPracticeTime'] =
-          (value['dailyPracticeTime'] as num).toInt();
-    }
-    if (value.containsKey('link')) {
-      data['link'] = value['link']?.toString().trim() ?? '';
-    }
-    if (value.containsKey('category')) {
-      data['category'] = value['category']?.toString().trim() ?? '';
-    }
+    if (value.containsKey('link')) data['link'] = value['link']?.toString().trim() ?? '';
+    if (value.containsKey('category')) data['category'] = value['category']?.toString().trim() ?? '';
     if (value.containsKey('level')) {
       final level = value['level']?.toString().trim() ?? '';
       if (level.isNotEmpty) data['level'] = level;
     }
-
     return data;
   }
 
