@@ -11,6 +11,7 @@ class GuitarPractice {
     required this.duration,
     required this.description,
     required this.dailyPracticeTime,
+    required this.link,
   });
 
   final String id;
@@ -20,6 +21,7 @@ class GuitarPractice {
   final int duration;
   final String description;
   final int dailyPracticeTime;
+  final String link;
 
   factory GuitarPractice.fromDocument(Document document) {
     final data = document.data;
@@ -31,6 +33,7 @@ class GuitarPractice {
       duration: (data['duration'] as num?)?.toInt() ?? 0,
       description: data['description']?.toString() ?? '',
       dailyPracticeTime: (data['dailyPracticeTime'] as num?)?.toInt() ?? 0,
+      link: data['link']?.toString() ?? '',
     );
   }
 }
@@ -68,11 +71,6 @@ class GuitarPracticeApi {
   Future<GuitarPracticeResponse> list() async {
     _validateConfig();
 
-    // Do not filter tasks by their creation date. A guitar practice task
-    // remains visible regardless of when it was created.
-    //
-    // Appwrite limits a single query page, so fetch all pages in batches of
-    // 100. This keeps the phone screen in sync even when there are many tasks.
     const pageSize = 100;
     final documents = <Document>[];
     var offset = 0;
@@ -88,7 +86,6 @@ class GuitarPracticeApi {
       );
 
       documents.addAll(result.documents);
-
       if (result.documents.length < pageSize) break;
       offset += pageSize;
     }
@@ -170,6 +167,9 @@ class GuitarPracticeApi {
     if (value.containsKey('dailyPracticeTime')) {
       final practiceTime = value['dailyPracticeTime'];
       if (practiceTime is num) data['dailyPracticeTime'] = practiceTime.toInt();
+    }
+    if (value.containsKey('link')) {
+      data['link'] = value['link']?.toString().trim() ?? '';
     }
 
     return data;
