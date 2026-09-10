@@ -6,420 +6,130 @@ import 'package:audioplayers/audioplayers.dart';
 import 'package:record/record.dart';
 
 class GuitarTunerSheet extends StatefulWidget {
-  const GuitarTunerSheet({super.key, this.embedded = false});
-  final bool embedded;
-  @override State<GuitarTunerSheet> createState() => _GuitarTunerSheetState();
+  const GuitarTunerSheet({super.key,this.embedded=false,this.onClose});
+  final bool embedded; final VoidCallback? onClose;
+  @override State<GuitarTunerSheet> createState()=>_TunerState();
 }
+class GuitarTunerScreen extends StatelessWidget {
+  const GuitarTunerScreen({super.key});
+  @override Widget build(BuildContext c)=>const Scaffold(
+    backgroundColor:Color(0xFF06151D),
+    body:SafeArea(child:GuitarTunerSheet(embedded:true)));
+}
+class _N {const _N(this.n,this.f,this.no);final String n;final double f;final int no;}
+const _ns=[_N('E',82.41,6),_N('A',110,5),_N('D',146.83,4),_N('G',196,3),_N('B',246.94,2),_N('E',329.63,1)];
 
-class _GuitarTunerSheetState extends State<GuitarTunerSheet> {
-  static const int sr = 44100;
-  static const double tolerance = 5.0;
-  static const notes = [
-    _N('E', 82.41, '6th string', '6'), _N('A', 110, '5th string', '5'),
-    _N('D', 146.83, '4th string', '4'), _N('G', 196, '3rd string', '3'),
-    _N('B', 246.94, '2nd string', '2'), _N('E', 329.63, '1st string', '1'),
-  ];
-
-  final recorder = AudioRecorder();
-  final AudioPlayer _tuningSound = AudioPlayer();
-  StreamSubscription<Uint8List>? sub;
-  final samples = <int>[];
-  bool running = false;
-  bool _inTuneSoundPlayed = false;
-  final Set<String> _tunedStrings = <String>{};
-  String note = '--', stringName = 'Play a string';
-  double hz = 0, cents = 0, confidence = 0;
-
-  @override void initState() { super.initState(); start(); }
-  @override void dispose() { stop(); recorder.dispose(); _tuningSound.dispose(); super.dispose(); }
-
-  Future<void> start() async {
-    try {
-      if (!await recorder.hasPermission()) {
-        if (mounted) ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Microphone permission is required for tuning.')));
-        return;
-      }
-      final stream = await recorder.startStream(const RecordConfig(
-        encoder: AudioEncoder.pcm16bits, sampleRate: sr, numChannels: 1,
-        autoGain: false, echoCancel: false, noiseSuppress: false,
-      ));
-      sub = stream.listen(onAudio);
-      if (mounted) setState(() => running = true);
-    } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Could not start microphone: ' + e.toString())));
-    }
+class _TunerState extends State<GuitarTunerSheet> with SingleTickerProviderStateMixin {
+  final _r=AudioRecorder(),_p=AudioPlayer(); StreamSubscription<Uint8List>? _sub;
+  late final AnimationController _a; final Set<int> _done={};
+  bool listen=false,has=false,ok=false,lastOk=false,busy=false; int selected=5,detected=5;
+  double hz=0,cents=0,level=0;
+  @override void initState(){super.initState();_a=AnimationController(vsync:this,duration:const Duration(milliseconds:900))..repeat();}
+  @override void dispose(){_stop();_a.dispose();_p.dispose();_r.dispose();super.dispose();}
+  Future<void> _toggle() async=>listen?_stop():_start();
+  Future<void> _start() async{
+    if(!await _r.hasPermission()||!mounted)return;
+    try{
+      final s=await _r.startStream(const RecordConfig(encoder:AudioEncoder.pcm16bits,sampleRate:44100,numChannels:1,autoGain:true,echoCancel:false,noiseSuppress:true));
+      _sub=s.listen(_pcm,onError:(_){if(mounted)setState(()=>listen=false);}); if(mounted)setState(()=>listen=true);
+    }catch(_){}
   }
-
-  Future<void> stop() async {
-    await sub?.cancel(); sub = null;
-    try { if (await recorder.isRecording()) await recorder.stop(); } catch (_) {}
-    if (mounted) setState(() => running = false);
+  Future<void> _stop() async{
+    await _sub?.cancel();_sub=null;try{await _r.stop();}catch(_){}
+    if(mounted)setState(()=>{listen=false,has=false,ok=false,hz=0,cents=0,level=0,lastOk=false});
   }
-
-  Future<void> _playInTuneSound() async {
-    try {
-      await _tuningSound.stop();
-      await _tuningSound.play(
-        BytesSource(_buildInTuneWav(), mimeType: 'audio/wav'),
-        volume: 0.65,
-        mode: PlayerMode.lowLatency,
-      );
-    } catch (_) {
-      // Tuning must continue even if the confirmation sound cannot play.
-    }
+  void _pcm(Uint8List bytes){
+    if(bytes.length<4096)return; final x=Int16List(bytes.length~/2);final d=ByteData.sublistView(bytes);double m=0;
+    for(var i=0;i<x.length;i++){x[i]=d.getInt16(i*2,Endian.little);m+=x[i];}m/=x.length;double e=0;
+    for(final v in x){final z=v-m;e+=z*z;}final rms=math.sqrt(e/x.length);final lev=(rms/1800).clamp(0.0,1.0).toDouble();
+    if(rms<180){if(mounted)setState(()=>{has=false,ok=false,level=lev});return;}
+    final f=_pitch(x,m);if(f==null||f<70||f>370){if(mounted)setState(()=>{has=false,ok=false,level=lev});return;}
+    final near=_near(f), manual=1200*math.log(f/_ns[selected].f)/math.ln2, idx=manual.abs()<700?selected:near;
+    final c=1200*math.log(f/_ns[idx].f)/math.ln2, tuned=c.abs()<=5;
+    if(tuned){_done.add(idx);if(!lastOk&&!busy){lastOk=true;unawaited(_chime());}}else{lastOk=false;}
+    if(mounted)setState(()=>{has=true,level=lev,hz=f,cents=c,detected=idx,ok=tuned});
   }
-
-  Uint8List _buildInTuneWav() {
-    const sampleRate = 44100;
-    const seconds = 0.34;
-    final count = (sampleRate * seconds).round();
-    final data = ByteData(44 + count * 2);
-    void putString(int offset, String value) {
-      for (var i = 0; i < value.length; i++) {
-        data.setUint8(offset + i, value.codeUnitAt(i));
-      }
-    }
-
-    putString(0, 'RIFF');
-    data.setUint32(4, 36 + count * 2, Endian.little);
-    putString(8, 'WAVE');
-    putString(12, 'fmt ');
-    data.setUint32(16, 16, Endian.little);
-    data.setUint16(20, 1, Endian.little);
-    data.setUint16(22, 1, Endian.little);
-    data.setUint32(24, sampleRate, Endian.little);
-    data.setUint32(28, sampleRate * 2, Endian.little);
-    data.setUint16(32, 2, Endian.little);
-    data.setUint16(34, 16, Endian.little);
-    putString(36, 'data');
-    data.setUint32(40, count * 2, Endian.little);
-
-    for (var i = 0; i < count; i++) {
-      final time = i / sampleRate;
-      final freq = time < 0.17 ? 659.25 : 987.77;
-      final local = time < 0.17 ? time : time - 0.17;
-      final attack = (local / 0.018).clamp(0.0, 1.0);
-      final release = ((0.16 - local) / 0.045).clamp(0.0, 1.0);
-      final envelope = attack * release;
-      final sample = math.sin(2 * math.pi * freq * time) * envelope * 0.42;
-      data.setInt16(44 + i * 2, (sample * 32767).round(), Endian.little);
-    }
-    return data.buffer.asUint8List();
+  double? _pitch(Int16List x,double m){
+    final n=x.length,min=(44100/370).floor(),max=math.min((44100/70).ceil(),n~/2);var best=-1;var bc=0.0;
+    for(var lag=min;lag<=max;lag+=2){double dot=0,a=0,b=0;for(var i=0;i<n-lag;i+=2){final u=x[i]-m,v=x[i+lag]-m;dot+=u*v;a+=u*u;b+=v*v;}if(a>0&&b>0){final q=dot/math.sqrt(a*b);if(q>bc){bc=q;best=lag;}}}
+    return best<0||bc<.35?null:44100/best;
   }
-
-  void onAudio(Uint8List bytes) {
-    for (var i = 0; i + 1 < bytes.length; i += 2) {
-      final v = bytes[i] | (bytes[i + 1] << 8);
-      samples.add(v > 32767 ? v - 65536 : v);
-    }
-    const n = 4096;
-    if (samples.length < n) return;
-    if (samples.length > n * 2) samples.removeRange(0, samples.length - n);
-    final p = pitch(samples);
-    if (p == null) return;
-
-    final target = nearest(p.f);
-    final rawCents = 1200 * math.log(p.f / target.f) / math.ln2;
-    final c = rawCents.clamp(-50.0, 50.0).toDouble();
-    final ok = c.abs() <= tolerance && p.c >= .60;
-
-    if (ok) {
-      _tunedStrings.add(target.stringName);
-      if (!_inTuneSoundPlayed) {
-        _inTuneSoundPlayed = true;
-        unawaited(_playInTuneSound());
-      }
-    } else if (!ok) {
-      _inTuneSoundPlayed = false;
-    }
-
-    if (mounted) setState(() {
-      hz = p.f; confidence = p.c; note = target.name;
-      stringName = target.stringName; cents = c;
-    });
+  int _near(double f){var bi=0,be=1e9;for(var i=0;i<_ns.length;i++){final e=(1200*math.log(f/_ns[i].f)/math.ln2).abs();if(e<be){be=e;bi=i;}}return bi;}
+  Future<void> _chime() async{
+    busy=true;try{await _p.stop();await _p.play(BytesSource(_wav()),volume:.65);}catch(_){}
+    await Future<void>.delayed(const Duration(milliseconds:350));busy=false;
   }
-
-  _P? pitch(List<int> x) {
-    final n = x.length;
-    var mean = 0.0;
-    for (final v in x) mean += v;
-    mean /= n;
-    var energy = 0.0;
-    for (final v in x) { final z = v - mean; energy += z * z; }
-    if (math.sqrt(energy / n) < 180) return null;
-
-    final minLag = (sr / 500).round();
-    final maxLag = math.min((sr / 70).round(), n ~/ 2);
-    var best = 0, bestC = 0.0;
-
-    for (var lag = minLag; lag <= maxLag; lag++) {
-      var dot = 0.0, a2 = 0.0, b2 = 0.0;
-      for (var i = 0; i < n - lag; i += 2) {
-        final a = x[i] - mean, b = x[i + lag] - mean;
-        dot += a * b; a2 += a * a; b2 += b * b;
-      }
-      if (a2 > 0 && b2 > 0) {
-        final c = dot / math.sqrt(a2 * b2);
-        if (c > bestC) { bestC = c; best = lag; }
-      }
-    }
-    if (best == 0 || bestC < .55) return null;
-
-    var lag = best.toDouble();
-    if (best > minLag && best < maxLag) {
-      final y1 = corr(x, best - 1, mean), y2 = corr(x, best, mean);
-      final y3 = corr(x, best + 1, mean), d = y1 - 2 * y2 + y3;
-      if (d.abs() > 1e-9) lag += .5 * (y1 - y3) / d;
-    }
-    return _P(sr / lag, bestC);
+  Uint8List _wav(){const sr=44100,n=13230;final b=ByteData(44+n*2);void s(int o,String v){for(var i=0;i<v.length;i++)b.setUint8(o+i,v.codeUnitAt(i));}
+    s(0,'RIFF');b.setUint32(4,36+n*2,Endian.little);s(8,'WAVE');s(12,'fmt ');b.setUint32(16,16,Endian.little);b.setUint16(20,1,Endian.little);b.setUint16(22,1,Endian.little);
+    b.setUint32(24,sr,Endian.little);b.setUint32(28,sr*2,Endian.little);b.setUint16(32,2,Endian.little);b.setUint16(34,16,Endian.little);s(36,'data');b.setUint32(40,n*2,Endian.little);
+    for(var i=0;i<n;i++){final t=i/sr,e=math.min(1,t/.015)*math.max(0,math.min(1,(.30-t)/.08));final v=(math.sin(2*math.pi*659.25*t)+.65*math.sin(2*math.pi*987.77*t))*e*.22;b.setInt16(44+i*2,(v*32767).round(),Endian.little);}
+    return b.buffer.asUint8List();
   }
-
-  double corr(List<int> x, int lag, double mean) {
-    var dot = 0.0, a2 = 0.0, b2 = 0.0;
-    for (var i = 0; i < x.length - lag; i += 2) {
-      final a = x[i] - mean, b = x[i + lag] - mean;
-      dot += a * b; a2 += a * a; b2 += b * b;
-    }
-    return a2 > 0 && b2 > 0 ? dot / math.sqrt(a2 * b2) : 0;
-  }
-
-  _N nearest(double f) => notes.reduce(
-    (a, b) => (f - a.f).abs() < (f - b.f).abs() ? a : b);
-
-  bool get inTune => hz > 0 && cents.abs() <= tolerance && confidence >= .60;
-  Color get accent => hz == 0 ? Colors.white54 :
-    inTune ? const Color(0xFF25E88A) :
-    cents.abs() <= 20 ? const Color(0xFFFFC44D) : const Color(0xFFFF756B);
-  String get status => hz == 0 ? 'PLAY A STRING' :
-    inTune ? 'IN TUNE!' : cents < 0 ? 'TUNE UP ↑' : 'TUNE DOWN ↓';
-
-  @override Widget build(BuildContext context) {
-    return Material(
-      color: const Color(0xFF06131A),
-      borderRadius: widget.embedded ? BorderRadius.zero : const BorderRadius.vertical(top: Radius.circular(30)),
-      clipBehavior: Clip.antiAlias,
-      child: SafeArea(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.fromLTRB(22, 10, 22, 20),
-          child: Column(children: [
-            if (!widget.embedded) ...[
-              Container(width: 46, height: 4, decoration: BoxDecoration(
-                color: Colors.white24, borderRadius: BorderRadius.circular(4))),
-              const SizedBox(height: 14),
-            ],
-            Row(children: [
-              const Expanded(child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text('Guitar Tuner', style: TextStyle(
-                    color: Colors.white, fontSize: 24, fontWeight: FontWeight.w800)),
-                  SizedBox(height: 3),
-                  Text('Play a string and tune to the center',
-                    style: TextStyle(color: Colors.white54, fontSize: 13)),
-                ],
-              )),
-              IconButton(
-                onPressed: running ? stop : start,
-                icon: Icon(running ? Icons.mic_rounded : Icons.mic_off_rounded,
-                  color: running ? accent : Colors.white54)),
-              if (!widget.embedded)
-                IconButton(
-                  onPressed: () => Navigator.pop(context),
-                  icon: const Icon(Icons.close_rounded, color: Colors.white70)),
-            ]),
-            const SizedBox(height: 10),
-
-            AnimatedContainer(
-              duration: const Duration(milliseconds: 220),
-              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
-              decoration: BoxDecoration(
-                color: inTune ? const Color(0xFF123B2A) : const Color(0xFF10242E),
-                borderRadius: BorderRadius.circular(30),
-                border: Border.all(color: inTune ? accent : Colors.white10),
-                boxShadow: inTune ? [BoxShadow(
-                  color: accent.withOpacity(.22), blurRadius: 18)] : null,
-              ),
-              child: Text(inTune ? '✓  In Tune!' : stringName,
-                style: TextStyle(color: inTune ? accent : Colors.white70,
-                  fontSize: 15, fontWeight: FontWeight.w700)),
-            ),
-            const SizedBox(height: 5),
-            Text(note, style: TextStyle(color: accent, fontSize: 82,
-              height: .95, fontWeight: FontWeight.w900)),
-            Text(hz == 0 ? '— Hz' : hz.toStringAsFixed(1) + ' Hz',
-              style: const TextStyle(color: Colors.white60, fontSize: 16)),
-
-            const SizedBox(height: 3),
-            SizedBox(height: 160, width: double.infinity,
-              child: CustomPaint(painter: _TuningGauge(
-                cents: cents, activeColor: accent, inTune: inTune))),
-
-            Text(status, style: TextStyle(color: accent, fontSize: 18,
-              fontWeight: FontWeight.w900, letterSpacing: 1.2)),
-            const SizedBox(height: 4),
-            Text(hz == 0 ? 'Pluck one string near the microphone' :
-              (cents >= 0 ? '+' : '') + cents.toStringAsFixed(1) + ' cents',
-              style: const TextStyle(color: Colors.white54, fontSize: 14)),
-
-            const SizedBox(height: 10),
-            AnimatedContainer(
-              duration: const Duration(milliseconds: 200),
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 9),
-              decoration: BoxDecoration(
-                color: inTune ? const Color(0xFF123B2A) : const Color(0xFF0D202A),
-                borderRadius: BorderRadius.circular(22),
-                border: Border.all(color: inTune ? accent : Colors.white10),
-              ),
-              child: Text(
-                inTune ? '✓ Within tolerance  ±5 cents' : 'Tune to the green center',
-                style: TextStyle(color: inTune ? accent : Colors.white54,
-                  fontWeight: FontWeight.w700, fontSize: 13)),
-            ),
-
-            const SizedBox(height: 14),
-            Row(mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: notes.map((n) {
-                final selected = n.name == note && n.stringName == stringName;
-                final tuned = _tunedStrings.contains(n.stringName);
-
-                return AnimatedContainer(
-                  duration: const Duration(milliseconds: 220),
-                  curve: Curves.easeOutBack,
-                  width: 47, height: 58,
-                  decoration: BoxDecoration(
-                    color: tuned
-                        ? const Color(0xFF123B2A)
-                        : selected
-                            ? const Color(0xFF10242E)
-                            : const Color(0xFF0D202A),
-                    borderRadius: BorderRadius.circular(14),
-                    border: Border.all(
-                      color: tuned || selected ? accent : Colors.white10,
-                      width: tuned || selected ? 1.5 : 1),
-                    boxShadow: tuned ? [
-                      BoxShadow(color: accent.withOpacity(.16), blurRadius: 12)
-                    ] : null,
-                  ),
-                  child: Stack(
-                    clipBehavior: Clip.none,
-                    children: [
-                      Center(
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Text(n.name, style: TextStyle(
-                              color: tuned || selected ? accent : Colors.white70,
-                              fontSize: 20, fontWeight: FontWeight.w800)),
-                            Text(n.number, style: TextStyle(
-                              color: tuned ? Colors.white54 : Colors.white30,
-                              fontSize: 11)),
-                          ],
-                        ),
-                      ),
-                      if (tuned)
-                        Positioned(
-                          top: -9,
-                          right: -5,
-                          child: Container(
-                            width: 20,
-                            height: 20,
-                            decoration: BoxDecoration(
-                              color: const Color(0xFF25E88A),
-                              shape: BoxShape.circle,
-                              boxShadow: [
-                                BoxShadow(
-                                  color: const Color(0xFF25E88A).withOpacity(.35),
-                                  blurRadius: 8,
-                                ),
-                              ],
-                            ),
-                            child: const Icon(
-                              Icons.check_rounded,
-                              color: Color(0xFF06131A),
-                              size: 14,
-                            ),
-                          ),
-                        ),
-                    ],
-                  ),
-                );
-              }).toList()),
-          ]),
-        ),
-      ),
-    );
+  Color get ac=>!has?Colors.white54:ok?const Color(0xFF19F59A):cents.abs()<=20?const Color(0xFFFFC33D):const Color(0xFFFF6E6E);
+  @override Widget build(BuildContext c){
+    final bg=const Color(0xFF06151D);
+    return Material(color:bg,borderRadius:widget.embedded?BorderRadius.zero:const BorderRadius.vertical(top:Radius.circular(30)),clipBehavior:Clip.antiAlias,
+      child:SafeArea(child:SingleChildScrollView(padding:const EdgeInsets.fromLTRB(22,12,22,22),child:Column(children:[
+        if(!widget.embedded)Container(width:46,height:4,decoration:BoxDecoration(color:Colors.white24,borderRadius:BorderRadius.circular(4))),
+        if(!widget.embedded)const SizedBox(height:14),
+        Row(children:[const Expanded(child:Text('Guitar Tuner',style:TextStyle(color:Colors.white,fontSize:25,fontWeight:FontWeight.w800))),
+          IconButton(onPressed:_toggle,icon:Icon(listen?Icons.mic_rounded:Icons.mic_off_rounded,color:ac)),
+          if(!widget.embedded)IconButton(onPressed:widget.onClose??()=>Navigator.pop(c),icon:const Icon(Icons.close_rounded,color:Colors.white70))]),
+        const Align(alignment:Alignment.centerLeft,child:Text('Play a string and tune to the center',style:TextStyle(color:Colors.white54,fontSize:14))),
+        const SizedBox(height:12),
+        AnimatedContainer(duration:const Duration(milliseconds:180),padding:const EdgeInsets.symmetric(horizontal:18,vertical:9),
+          decoration:BoxDecoration(color:ok?const Color(0xFF103B2A):const Color(0xFF10242E),borderRadius:BorderRadius.circular(24),border:Border.all(color:ok?ac:Colors.white10)),
+          child:Text(ok?'✓  In Tune!':_ns[detected].n+' string',style:TextStyle(color:ok?ac:Colors.white70,fontWeight:FontWeight.w800))),
+        const SizedBox(height:5),
+        AnimatedBuilder(animation:_a,builder:(_,__)=>SizedBox(height:180,width:double.infinity,child:CustomPaint(painter:_Wave(has:has,ok:ok,c:cents,p:_a.value)))),
+        Text(has?_ns[detected].n:'--',style:TextStyle(color:ac,fontSize:82,height:.88,fontWeight:FontWeight.w900)),
+        Text(has?hz.toStringAsFixed(1)+' Hz':'— Hz',style:const TextStyle(color:Colors.white70,fontSize:17,fontWeight:FontWeight.w600)),
+        Text(has?(cents>=0?'+':'')+cents.toStringAsFixed(1)+' cents':'Tune until the center is reached',
+          style:TextStyle(color:ac,fontSize:18,fontWeight:FontWeight.w800)),
+        const SizedBox(height:8),
+        SizedBox(height:74,width:double.infinity,child:CustomPaint(painter:_Ruler(c:cents,active:has,ok:ok))),
+        const SizedBox(height:15),
+        Row(mainAxisAlignment:MainAxisAlignment.spaceBetween,children:List.generate(6,(i){
+          final done=_done.contains(i),sel=i==selected;
+          return GestureDetector(onTap:()=>setState(()=>selected=i),child:AnimatedContainer(duration:const Duration(milliseconds:220),width:48,height:64,
+            decoration:BoxDecoration(color:done?const Color(0xFF103B2A):const Color(0xFF0C222D),borderRadius:BorderRadius.circular(15),
+              border:Border.all(color:done||sel?const Color(0xFF19F59A):const Color(0xFF193642),width:done||sel?1.7:1)),
+            child:Stack(clipBehavior:Clip.none,children:[
+              Center(child:Column(mainAxisAlignment:MainAxisAlignment.center,children:[
+                Text(_ns[i].n,style:TextStyle(color:done?const Color(0xFF19F59A):Colors.white,fontSize:22,fontWeight:FontWeight.w800)),
+                Text(_ns[i].no.toString(),style:const TextStyle(color:Colors.white38,fontSize:11))])),
+              if(done)Positioned(top:-9,right:-5,child:Container(width:22,height:22,decoration:const BoxDecoration(color:Color(0xFF19F59A),shape:BoxShape.circle),
+                child:const Icon(Icons.check_rounded,color:Color(0xFF06151D),size:15))),
+            ])));
+        })),
+        const SizedBox(height:12),
+        Text(ok?'Green zone: ±5 cents  •  chime played':'Tune to the green center zone',
+          style:TextStyle(color:ok?const Color(0xFF19F59A):Colors.white38,fontSize:13,fontWeight:FontWeight.w600)),
+      ]))));
   }
 }
 
-class _N {
-  const _N(this.name, this.f, this.stringName, this.number);
-  final String name, stringName, number; final double f;
-}
-class _P {
-  const _P(this.f, this.c);
-  final double f, c;
-}
-
-class _TuningGauge extends CustomPainter {
-  const _TuningGauge({required this.cents, required this.activeColor, required this.inTune});
-  final double cents; final Color activeColor; final bool inTune;
-
-  @override void paint(Canvas canvas, Size size) {
-    final center = Offset(size.width / 2, size.height - 14);
-    final radius = math.min(size.width * .39, size.height * 1.05);
-    final rect = Rect.fromCircle(center: center, radius: radius);
-    const start = math.pi * 1.18, sweep = math.pi * .64;
-    final mid = start + sweep / 2;
-
-    final base = Paint()..color = Colors.white10..style = PaintingStyle.stroke
-      ..strokeWidth = 10..strokeCap = StrokeCap.round;
-    canvas.drawArc(rect, start, sweep, false, base);
-
-    final green = Paint()..color = const Color(0xFF25E88A).withOpacity(.28)
-      ..style = PaintingStyle.stroke..strokeWidth = 15..strokeCap = StrokeCap.round;
-    canvas.drawArc(rect, mid - sweep * .05, sweep * .10, false, green);
-
-    final tick = Paint()..color = Colors.white38..strokeWidth = 2;
-    for (var i = -10; i <= 10; i++) {
-      final a = mid + (i / 10) * sweep / 2;
-      final inner = radius - (i % 5 == 0 ? 25 : 18);
-      canvas.drawLine(
-        Offset(center.dx + math.cos(a) * inner, center.dy + math.sin(a) * inner),
-        Offset(center.dx + math.cos(a) * (radius - 3), center.dy + math.sin(a) * (radius - 3)),
-        tick);
-    }
-
-    void label(String s, double a) {
-      final tp = TextPainter(text: TextSpan(text: s, style: const TextStyle(
-        color: Colors.white54, fontSize: 11, fontWeight: FontWeight.w600)),
-        textDirection: TextDirection.ltr)..layout();
-      tp.paint(canvas, Offset(center.dx + math.cos(a) * (radius - 42) - tp.width / 2,
-        center.dy + math.sin(a) * (radius - 42) - tp.height / 2));
-    }
-    label('-50', mid - sweep / 2);
-    label('-25', mid - sweep / 4);
-    label('-5', mid - sweep * .05);
-    label('0', mid);
-    label('+5', mid + sweep * .05);
-    label('+25', mid + sweep / 4);
-    label('+50', mid + sweep / 2);
-
-    final v = cents.clamp(-50.0, 50.0).toDouble();
-    final angle = mid + (v / 50) * sweep / 2;
-    final needle = Paint()..color = inTune ? const Color(0xFF25E88A) : activeColor
-      ..strokeWidth = 4..strokeCap = StrokeCap.round;
-    canvas.drawLine(center,
-      Offset(center.dx + math.cos(angle) * (radius - 12),
-        center.dy + math.sin(angle) * (radius - 12)), needle);
-    canvas.drawCircle(center, 8, Paint()..color = needle.color);
-    if (inTune) {
-      canvas.drawCircle(center, 17, Paint()
-        ..color = const Color(0xFF25E88A).withOpacity(.12));
-    }
+class _Wave extends CustomPainter{
+  const _Wave({required this.has,required this.ok,required this.c,required this.p});final bool has,ok;final double c,p;
+  @override void paint(Canvas x,Size s){final cx=s.width/2,cy=s.height/2;
+    if(has)x.drawCircle(Offset(cx,cy),55,Paint()..color=(ok?const Color(0xFF19F59A):Colors.white).withOpacity(.08)..maskFilter=const MaskFilter.blur(BlurStyle.normal,25));
+    x.drawLine(Offset(cx,10),Offset(cx,s.height-8),Paint()..color=ok?const Color(0xFF19F59A):Colors.white54..strokeWidth=3..strokeCap=StrokeCap.round);
+    x.drawCircle(Offset(cx,cy),ok?18:13,Paint()..color=ok?const Color(0xFF19F59A):Colors.white70);
+    for(var i=0;i<17;i++){final d=22+i*16.0,n=d/278,w=has?math.sin(i*.85+p*math.pi*2+c*.035).abs():.08,h=has?28+w*(92*(1-n*.42)):12+(1-n)*8;
+      final q=Paint()..color=(ok?const Color(0xFF19F59A):Colors.white54).withOpacity(has?.28+(1-n)*.72:.2)..strokeWidth=4..strokeCap=StrokeCap.round;
+      x.drawLine(Offset(cx-d,cy-h/2),Offset(cx-d,cy+h/2),q);x.drawLine(Offset(cx+d,cy-h/2),Offset(cx+d,cy+h/2),q);}
   }
-
-  @override bool shouldRepaint(covariant _TuningGauge old) =>
-    old.cents != cents || old.activeColor != activeColor || old.inTune != inTune;
+  @override bool shouldRepaint(covariant _Wave o)=>o.c!=c||o.has!=has||o.ok!=ok||o.p!=p;
+}
+class _Ruler extends CustomPainter{
+  const _Ruler({required this.c,required this.active,required this.ok});final double c;final bool active,ok;
+  @override void paint(Canvas x,Size s){const green=Color(0xFF19F59A),amber=Color(0xFFFFC33D),red=Color(0xFFFF6E6E);final y=30.0;
+    for(var i=0;i<25;i++){final v=-50+i*100/24,px=(v+50)/100*s.width,col=v.abs()<=5?green:v.abs()<=25?amber:red;
+      x.drawLine(Offset(px,y-(i%2==0?16:11)),Offset(px,y+(i%2==0?16:11)),Paint()..color=col.withOpacity(active?1:.55)..strokeWidth=i%2==0?3:2..strokeCap=StrokeCap.round);}
+    final v=active?c.clamp(-50.0,50.0):0.0,px=(v+50)/100*s.width,p=Paint()..color=ok?green:Colors.white70..strokeWidth=3.5;
+    x.drawLine(Offset(px,3),Offset(px,58),p);final path=Path()..moveTo(px-8,62)..lineTo(px+8,62)..lineTo(px,52)..close();x.drawPath(path,Paint()..color=ok?green:Colors.white70);
+    _t(x,s,'-50',0,TextAlign.left);_t(x,s,'-25',.25,TextAlign.center);_t(x,s,'-5',.45,TextAlign.center);_t(x,s,'+5',.55,TextAlign.center);_t(x,s,'+25',.75,TextAlign.center);_t(x,s,'+50',1,TextAlign.right);
+  }
+  void _t(Canvas x,Size s,String z,double f,TextAlign a){final q=TextPainter(text:TextSpan(text:z,style:const TextStyle(color:Colors.white54,fontSize:11)),textDirection:TextDirection.ltr)..layout();final px=f*s.width-(a==TextAlign.left?0:a==TextAlign.right?q.width:q.width/2);q.paint(x,Offset(px,63));}
+  @override bool shouldRepaint(covariant _Ruler o)=>o.c!=c||o.active!=active||o.ok!=ok;
 }
