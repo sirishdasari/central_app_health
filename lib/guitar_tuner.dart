@@ -22,9 +22,14 @@ const _ns=[_N('E',82.41,6),_N('A',110,5),_N('D',146.83,4),_N('G',196,3),_N('B',2
 class _TunerState extends State<GuitarTunerSheet> with SingleTickerProviderStateMixin {
   final _r=AudioRecorder(),_p=AudioPlayer(); StreamSubscription<Uint8List>? _sub;
   late final AnimationController _a; final Set<int> _done={};
+  DateTime _lastNoteSwitch=DateTime.fromMillisecondsSinceEpoch(0);
   bool listen=false,has=false,ok=false,lastOk=false,busy=false; int selected=5,detected=5;
   double hz=0,cents=0,level=0;
-  @override void initState(){super.initState();_a=AnimationController(vsync:this,duration:const Duration(milliseconds:900))..repeat();}
+  @override void initState(){
+    super.initState();
+    _a=AnimationController(vsync:this,duration:const Duration(milliseconds:900))..repeat();
+    WidgetsBinding.instance.addPostFrameCallback((_)=>_start());
+  }
   @override void dispose(){_stop();_a.dispose();_p.dispose();_r.dispose();super.dispose();}
   Future<void> _toggle() async=>listen?_stop():_start();
   Future<void> _start() async{
@@ -46,6 +51,14 @@ class _TunerState extends State<GuitarTunerSheet> with SingleTickerProviderState
     final f=_pitch(x,m);if(f==null||f<70||f>370){if(mounted)setState(()=>{has=false,ok=false,level=lev});return;}
     final near=_near(f), manual=1200*math.log(f/_ns[selected].f)/math.ln2, idx=manual.abs()<700?selected:near;
     final c=1200*math.log(f/_ns[idx].f)/math.ln2, tuned=c.abs()<=5;
+    final now=DateTime.now();
+    final shouldFollow = idx != selected &&
+        (idx == near || manual.abs() > 180) &&
+        now.difference(_lastNoteSwitch).inMilliseconds > 220;
+    if(shouldFollow){
+      selected=idx;
+      _lastNoteSwitch=now;
+    }
     if(tuned){_done.add(idx);if(!lastOk&&!busy){lastOk=true;unawaited(_chime());}}else{lastOk=false;}
     if(mounted)setState(()=>{has=true,level=lev,hz=f,cents=c,detected=idx,ok=tuned});
   }
@@ -55,6 +68,20 @@ class _TunerState extends State<GuitarTunerSheet> with SingleTickerProviderState
     return best<0||bc<.35?null:44100/best;
   }
   int _near(double f){var bi=0,be=1e9;for(var i=0;i<_ns.length;i++){final e=(1200*math.log(f/_ns[i].f)/math.ln2).abs();if(e<be){be=e;bi=i;}}return bi;}
+  void _reset(){
+    _done.clear();
+    lastOk=false;
+    busy=false;
+    selected=5;
+    detected=5;
+    has=false;
+    ok=false;
+    hz=0;
+    cents=0;
+    level=0;
+    _lastNoteSwitch=DateTime.now();
+    if(mounted)setState((){});
+  }
   Future<void> _chime() async{
     busy=true;try{await _p.stop();await _p.play(BytesSource(_wav()),volume:.65);}catch(_){}
     await Future<void>.delayed(const Duration(milliseconds:350));busy=false;
@@ -73,6 +100,11 @@ class _TunerState extends State<GuitarTunerSheet> with SingleTickerProviderState
         if(!widget.embedded)Container(width:46,height:4,decoration:BoxDecoration(color:Colors.white24,borderRadius:BorderRadius.circular(4))),
         if(!widget.embedded)const SizedBox(height:14),
         Row(children:[const Expanded(child:Text('Guitar Tuner',style:TextStyle(color:Colors.white,fontSize:25,fontWeight:FontWeight.w800))),
+          IconButton(
+            tooltip:'Reset tuning',
+            onPressed:_reset,
+            icon:const Icon(Icons.restart_alt_rounded,color:Colors.white70),
+          ),
           IconButton(onPressed:_toggle,icon:Icon(listen?Icons.mic_rounded:Icons.mic_off_rounded,color:ac)),
           if(!widget.embedded)IconButton(onPressed:widget.onClose??()=>Navigator.pop(c),icon:const Icon(Icons.close_rounded,color:Colors.white70))]),
         const Align(alignment:Alignment.centerLeft,child:Text('Play a string and tune to the center',style:TextStyle(color:Colors.white54,fontSize:14))),
@@ -82,8 +114,8 @@ class _TunerState extends State<GuitarTunerSheet> with SingleTickerProviderState
           child:Text(ok?'✓  In Tune!':_ns[detected].n+' string',style:TextStyle(color:ok?ac:Colors.white70,fontWeight:FontWeight.w800))),
         const SizedBox(height:5),
         AnimatedBuilder(animation:_a,builder:(_,__)=>SizedBox(height:180,width:double.infinity,child:CustomPaint(painter:_Wave(has:has,ok:ok,c:cents,p:_a.value)))),
-        Text(has?_ns[detected].n:'--',style:TextStyle(color:ac,fontSize:82,height:.88,fontWeight:FontWeight.w900)),
-        Text(has?hz.toStringAsFixed(1)+' Hz':'— Hz',style:const TextStyle(color:Colors.white70,fontSize:17,fontWeight:FontWeight.w600)),
+        Text(has?_ns[detected].n:_ns[selected].n,style:TextStyle(color:ac,fontSize:82,height:.88,fontWeight:FontWeight.w900)),
+        Text(has?hz.toStringAsFixed(1)+' Hz':'Listening…',style:const TextStyle(color:Colors.white70,fontSize:17,fontWeight:FontWeight.w600)),
         Text(has?(cents>=0?'+':'')+cents.toStringAsFixed(1)+' cents':'Tune until the center is reached',
           style:TextStyle(color:ac,fontSize:18,fontWeight:FontWeight.w800)),
         const SizedBox(height:8),
