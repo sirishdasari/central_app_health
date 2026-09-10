@@ -12,6 +12,8 @@ class GuitarPractice {
     required this.description,
     required this.dailyPracticeTime,
     required this.link,
+    required this.category,
+    required this.level,
   });
 
   final String id;
@@ -20,11 +22,10 @@ class GuitarPractice {
   final String suggestedTime;
   final int duration;
   final String description;
-  // Appwrite field: dailyPracticeTime (Integer). This is the configured
-  // daily practice target in minutes; it must not be overwritten when a
-  // session is recorded.
   final int dailyPracticeTime;
   final String link;
+  final String category;
+  final String level;
 
   factory GuitarPractice.fromDocument(Document document) {
     final data = document.data;
@@ -37,6 +38,8 @@ class GuitarPractice {
       description: data['description']?.toString() ?? '',
       dailyPracticeTime: (data['dailyPracticeTime'] as num?)?.toInt() ?? 0,
       link: data['link']?.toString() ?? '',
+      category: data['category']?.toString() ?? '',
+      level: data['level']?.toString() ?? '',
     );
   }
 }
@@ -109,13 +112,6 @@ class GuitarPracticeApi {
     if (id.trim().isEmpty) throw Exception('Practice id is empty');
     if (practicedSeconds <= 0) throw Exception('No practice time to record');
 
-    // The Appwrite schema currently contains dailyPracticeTime as an Integer,
-    // but that field is the configured daily target (minutes), not an elapsed
-    // session counter. Do not write seconds into it and do not send attributes
-    // that do not exist in the collection schema.
-    //
-    // The actual elapsed time remains available to the session UI. Appwrite
-    // records the completed state for this session.
     await _databases.updateDocument(
       databaseId: AppwriteConfig.databaseId,
       collectionId: collectionId,
@@ -183,6 +179,13 @@ class GuitarPracticeApi {
     }
     if (value.containsKey('link')) {
       data['link'] = value['link']?.toString().trim() ?? '';
+    }
+    if (value.containsKey('category')) {
+      data['category'] = value['category']?.toString().trim() ?? '';
+    }
+    if (value.containsKey('level')) {
+      final level = value['level']?.toString().trim() ?? '';
+      if (level.isNotEmpty) data['level'] = level;
     }
 
     return data;
