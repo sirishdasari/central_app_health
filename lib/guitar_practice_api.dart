@@ -12,9 +12,6 @@ class GuitarPractice {
     required this.description,
     required this.dailyPracticeTime,
     required this.link,
-    required this.dailyPracticeSeconds,
-    required this.practiceDate,
-    required this.practicedSeconds,
   });
 
   final String id;
@@ -23,11 +20,11 @@ class GuitarPractice {
   final String suggestedTime;
   final int duration;
   final String description;
+  // Appwrite field: dailyPracticeTime (Integer). This is the configured
+  // daily practice target in minutes; it must not be overwritten when a
+  // session is recorded.
   final int dailyPracticeTime;
   final String link;
-  final int dailyPracticeSeconds;
-  final String practiceDate;
-  final int practicedSeconds;
 
   factory GuitarPractice.fromDocument(Document document) {
     final data = document.data;
@@ -40,11 +37,6 @@ class GuitarPractice {
       description: data['description']?.toString() ?? '',
       dailyPracticeTime: (data['dailyPracticeTime'] as num?)?.toInt() ?? 0,
       link: data['link']?.toString() ?? '',
-      dailyPracticeSeconds:
-          (data['dailyPracticeSeconds'] as num?)?.toInt() ??
-          (data['todayPracticeSeconds'] as num?)?.toInt() ?? 0,
-      practiceDate: data['practiceDate']?.toString() ?? data['date']?.toString() ?? '',
-      practicedSeconds: (data['practicedSeconds'] as num?)?.toInt() ?? 0,
     );
   }
 }
@@ -71,8 +63,12 @@ class GuitarPracticeApi {
   late final Databases _databases = Databases(_client);
 
   void _validateConfig() {
-    if (AppwriteConfig.projectId.isEmpty) throw Exception('APPWRITE_PROJECT_ID is not configured');
-    if (AppwriteConfig.databaseId.isEmpty) throw Exception('APPWRITE_DATABASE_ID is not configured');
+    if (AppwriteConfig.projectId.isEmpty) {
+      throw Exception('APPWRITE_PROJECT_ID is not configured');
+    }
+    if (AppwriteConfig.databaseId.isEmpty) {
+      throw Exception('APPWRITE_DATABASE_ID is not configured');
+    }
   }
 
   Future<GuitarPracticeResponse> list() async {
@@ -80,6 +76,7 @@ class GuitarPracticeApi {
     const pageSize = 100;
     final documents = <Document>[];
     var offset = 0;
+
     while (true) {
       final result = await _databases.listDocuments(
         databaseId: AppwriteConfig.databaseId,
@@ -90,10 +87,15 @@ class GuitarPracticeApi {
       if (result.documents.length < pageSize) break;
       offset += pageSize;
     }
-    final practices = documents.map(GuitarPractice.fromDocument).toList(growable: false);
+
+    final practices = documents
+        .map(GuitarPractice.fromDocument)
+        .toList(growable: false);
+
     return GuitarPracticeResponse(
       date: _dateString(DateTime.now()),
-      dailyPracticeTime: practices.isEmpty ? 0 : practices.first.dailyPracticeTime,
+      dailyPracticeTime:
+          practices.isEmpty ? 0 : practices.first.dailyPracticeTime,
       practices: practices,
     );
   }
@@ -107,29 +109,18 @@ class GuitarPracticeApi {
     if (id.trim().isEmpty) throw Exception('Practice id is empty');
     if (practicedSeconds <= 0) throw Exception('No practice time to record');
 
-    final current = await _databases.getDocument(
-      databaseId: AppwriteConfig.databaseId,
-      collectionId: collectionId,
-      documentId: id,
-    );
-    final old = current.data;
-    final today = _dateString(practiceDate);
-    final oldDate = old['practiceDate']?.toString() ?? '';
-    final oldDaily = (old['dailyPracticeSeconds'] as num?)?.toInt() ??
-        (old['todayPracticeSeconds'] as num?)?.toInt() ?? 0;
-    final oldTotal = (old['practicedSeconds'] as num?)?.toInt() ?? 0;
-    final sameDay = oldDate == today;
-
+    // The Appwrite schema currently contains dailyPracticeTime as an Integer,
+    // but that field is the configured daily target (minutes), not an elapsed
+    // session counter. Do not write seconds into it and do not send attributes
+    // that do not exist in the collection schema.
+    //
+    // The actual elapsed time remains available to the session UI. Appwrite
+    // records the completed state for this session.
     await _databases.updateDocument(
       databaseId: AppwriteConfig.databaseId,
       collectionId: collectionId,
       documentId: id,
-      data: {
-        'dailyPracticeSeconds': (sameDay ? oldDaily : 0) + practicedSeconds,
-        'practicedSeconds': oldTotal + practicedSeconds,
-        'practiceDate': today,
-        'completed': true,
-      },
+      data: {'completed': true},
     );
   }
 
@@ -148,6 +139,7 @@ class GuitarPracticeApi {
     if (id.trim().isEmpty) throw Exception('Practice id is empty');
     final data = _toAppwriteData(value);
     if (data.isEmpty) return;
+
     await _databases.updateDocument(
       databaseId: AppwriteConfig.databaseId,
       collectionId: collectionId,
@@ -168,19 +160,36 @@ class GuitarPracticeApi {
 
   Map<String, dynamic> _toAppwriteData(Map<String, dynamic> value) {
     final data = <String, dynamic>{};
-    if (value.containsKey('title')) data['sessionName'] = value['title']?.toString() ?? '';
-    if (value.containsKey('completed')) data['completed'] = value['completed'] == true;
-    if (value.containsKey('suggestedTime')) data['suggestedTime'] = value['suggestedTime']?.toString() ?? '';
-    if (value.containsKey('duration') && value['duration'] is num) data['duration'] = (value['duration'] as num).toInt();
-    if (value.containsKey('description')) data['description'] = value['description']?.toString() ?? '';
-    if (value.containsKey('dailyPracticeTime') && value['dailyPracticeTime'] is num) data['dailyPracticeTime'] = (value['dailyPracticeTime'] as num).toInt();
-    if (value.containsKey('link')) data['link'] = value['link']?.toString().trim() ?? '';
-    if (value.containsKey('dailyPracticeSeconds') && value['dailyPracticeSeconds'] is num) data['dailyPracticeSeconds'] = (value['dailyPracticeSeconds'] as num).toInt();
-    if (value.containsKey('practicedSeconds') && value['practicedSeconds'] is num) data['practicedSeconds'] = (value['practicedSeconds'] as num).toInt();
-    if (value.containsKey('practiceDate')) data['practiceDate'] = value['practiceDate']?.toString() ?? '';
+
+    if (value.containsKey('title')) {
+      data['sessionName'] = value['title']?.toString() ?? '';
+    }
+    if (value.containsKey('completed')) {
+      data['completed'] = value['completed'] == true;
+    }
+    if (value.containsKey('suggestedTime')) {
+      data['suggestedTime'] = value['suggestedTime']?.toString() ?? '';
+    }
+    if (value.containsKey('duration') && value['duration'] is num) {
+      data['duration'] = (value['duration'] as num).toInt();
+    }
+    if (value.containsKey('description')) {
+      data['description'] = value['description']?.toString() ?? '';
+    }
+    if (value.containsKey('dailyPracticeTime') &&
+        value['dailyPracticeTime'] is num) {
+      data['dailyPracticeTime'] =
+          (value['dailyPracticeTime'] as num).toInt();
+    }
+    if (value.containsKey('link')) {
+      data['link'] = value['link']?.toString().trim() ?? '';
+    }
+
     return data;
   }
 
   String _dateString(DateTime value) =>
-      '${value.year.toString().padLeft(4, '0')}-${value.month.toString().padLeft(2, '0')}-${value.day.toString().padLeft(2, '0')}';
+      '${value.year.toString().padLeft(4, '0')}-'
+      '${value.month.toString().padLeft(2, '0')}-'
+      '${value.day.toString().padLeft(2, '0')}';
 }
