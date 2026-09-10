@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:math' as math;
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
-import 'package:audioplayers/audioplayers.dart';
+import 'package:flutter/services.dart';
 import 'package:record/record.dart';
 
 class GuitarTunerSheet extends StatefulWidget {
@@ -20,12 +20,9 @@ class _N {const _N(this.n,this.f,this.no);final String n;final double f;final in
 const _ns=[_N('E',82.41,6),_N('A',110,5),_N('D',146.83,4),_N('G',196,3),_N('B',246.94,2),_N('E',329.63,1)];
 
 class _TunerState extends State<GuitarTunerSheet> with SingleTickerProviderStateMixin {
-  final _r=AudioRecorder(),_p=AudioPlayer(); StreamSubscription<Uint8List>? _sub;
+  final _r=AudioRecorder(); StreamSubscription<Uint8List>? _sub;
   late final AnimationController _a; final Set<int> _done={};
   DateTime _lastNoteSwitch=DateTime.fromMillisecondsSinceEpoch(0);
-  DateTime _lastPitchProcess=DateTime.fromMillisecondsSinceEpoch(0);
-  bool _processing=false;
-  int _candidate=-1, _candidateHits=0;
   bool listen=false,has=false,ok=false,lastOk=false,busy=false; int selected=5,detected=5;
   double hz=0,cents=0,level=0;
   @override void initState(){
@@ -33,7 +30,7 @@ class _TunerState extends State<GuitarTunerSheet> with SingleTickerProviderState
     _a=AnimationController(vsync:this,duration:const Duration(milliseconds:900))..repeat();
     WidgetsBinding.instance.addPostFrameCallback((_)=>_start());
   }
-  @override void dispose(){_stop();_a.dispose();_p.dispose();_r.dispose();super.dispose();}
+  @override void dispose(){_stop();_a.dispose();_r.dispose();super.dispose();}
   Future<void> _toggle() async=>listen?_stop():_start();
   Future<void> _start() async{
     if(!await _r.hasPermission()||!mounted)return;
@@ -46,119 +43,109 @@ class _TunerState extends State<GuitarTunerSheet> with SingleTickerProviderState
     await _sub?.cancel();_sub=null;_samples.clear();try{await _r.stop();}catch(_){}
     if(mounted)setState(()=>{listen=false,has=false,ok=false,hz=0,cents=0,level=0,lastOk=false});
   }
-  void _pcm(Uint8List bytes){
-    for(var i=0;i+1<bytes.length;i+=2){
-      final v=bytes[i]|(bytes[i+1]<<8);
-      _samples.add(v>32767?v-65536:v);
+  void _pcm(Uint8List bytes) {
+    // This is intentionally the same audio pipeline used by the original
+    // speedometer tuner: accumulate a 4096-sample rolling window, run the
+    // proven autocorrelation detector, and immediately map the frequency to
+    // the nearest standard-tuning string.
+    for (var i = 0; i + 1 < bytes.length; i += 2) {
+      final v = bytes[i] | (bytes[i + 1] << 8);
+      _samples.add(v > 32767 ? v - 65536 : v);
     }
 
-    // AudioRecord can deliver packets much faster than the pitch algorithm
-    // can process them. The old speedometer tuner effectively behaved like
-    // this: analyze a stable window, then update the UI. Throttle the work
-    // so the UI/audio stream cannot be starved by overlapping autocorrelation.
-    const n=4096;
-    if(_samples.length<n||_processing)return;
-    final now=DateTime.now();
-    if(now.difference(_lastPitchProcess).inMilliseconds<90)return;
-    _lastPitchProcess=now;
+    const n = 4096;
+    if (_samples.length < n) return;
+    if (_samples.length > n * 2) {
+      _samples.removeRange(0, _samples.length - n);
+    }
 
-    if(_samples.length>n*2)_samples.removeRange(0,_samples.length-n);
-    final snapshot=List<int>.from(_samples);
-    _processing=true;
+    final p = _pitch(_samples);
+    if (p == null) return;
 
-    try{
-      final p=_pitch(snapshot);
-      if(p==null)return;
+    final idx = _near(p.f);
+    final target = _ns[idx];
+    final c = (1200 * math.log(p.f / target.f) / math.ln2)
+        .clamp(-50.0, 50.0)
+        .toDouble();
+    final tuned = c.abs() <= 5.0 && p.c >= .60;
 
-      final idx=_near(p.f);
-      final target=_ns[idx].f;
-      final c=(1200*math.log(p.f/target)/math.ln2).clamp(-50.0,50.0).toDouble();
-      final tuned=c.abs()<=5.0&&p.c>=.55;
-
-      // Require two consistent pitch windows before changing the displayed
-      // string. This prevents harmonics/noise from locking the tuner onto
-      // the wrong string while still making E -> A -> D -> G -> B -> E fast.
-      if(idx==_candidate){
-        _candidateHits++;
-      }else{
-        _candidate=idx;
-        _candidateHits=1;
+    if (tuned) {
+      final firstTime = !_done.contains(idx);
+      _done.add(idx);
+      if (firstTime) {
+        // Do not put an AudioPlayer operation in the microphone callback.
+        // The old tuner stayed responsive because detection was independent
+        // of confirmation audio.
+        unawaited(SystemSound.play(SystemSoundType.click));
       }
-      if(_candidateHits<2&&idx!=detected)return;
+    }
 
-      if(tuned){
-        final wasDone=_done.contains(idx);
-        _done.add(idx);
-        if(!wasDone){
-          unawaited(_chime());
-        }
-        lastOk=true;
-      }else{
-        lastOk=false;
-      }
-
-      if(mounted)setState((){
-        selected=idx;
-        detected=idx;
-        has=true;
-        ok=tuned;
-        hz=p.f;
-        cents=c;
-        level=p.c.clamp(0.0,1.0).toDouble();
+    if (mounted) {
+      setState(() {
+        selected = idx;
+        detected = idx;
+        has = true;
+        ok = tuned;
+        hz = p.f;
+        cents = c;
+        level = p.c.clamp(0.0, 1.0).toDouble();
+        lastOk = tuned;
       });
-    }finally{
-      _processing=false;
     }
   }
 
   final List<int> _samples=<int>[];
 
-  _P? _pitch(List<int> x){
-    final n=x.length;
-    var mean=0.0;
-    for(final v in x)mean+=v;
-    mean/=n;
+  _P? _pitch(List<int> x) {
+    final n = x.length;
+    var mean = 0.0;
+    for (final v in x) mean += v;
+    mean /= n;
 
-    var energy=0.0;
-    for(final v in x){final z=v-mean;energy+=z*z;}
-    if(math.sqrt(energy/n)<180)return null;
+    var e = 0.0;
+    for (final v in x) {
+      final z = v - mean;
+      e += z * z;
+    }
+    if (math.sqrt(e / n) < 180) return null;
 
-    // The previous speedometer tuner used the same autocorrelation idea,
-    // but scanning every possible lag on every microphone packet is too
-    // expensive for the richer UI. Search only around the six guitar
-    // fundamentals instead. This keeps the proven pitch method while making
-    // continuous E/A/D/G/B/E tracking cheap enough for the UI.
-    const sr=44100.0;
-    var bestLag=0;
-    var bestC=0.0;
+    final minLag = (44100 / 500).round();
+    final maxLag = math.min((44100 / 70).round(), n ~/ 2);
+    var best = 0;
+    var bestC = 0.0;
 
-    for(final target in _ns){
-      final expected=sr/target.f;
-      final from=math.max(1,(expected*.94).round());
-      final to=math.min(n~/2,(expected*1.06).round());
-
-      for(var lag=from;lag<=to;lag++){
-        var dot=0.0,a2=0.0,b2=0.0;
-        for(var i=0;i<n-lag;i+=2){
-          final aa=x[i]-mean,bb=x[i+lag]-mean;
-          dot+=aa*bb;a2+=aa*aa;b2+=bb*bb;
-        }
-        if(a2>0&&b2>0){
-          final c=dot/math.sqrt(a2*b2);
-          if(c>bestC){bestC=c;bestLag=lag;}
+    for (var lag = minLag; lag <= maxLag; lag++) {
+      var dot = 0.0, a2 = 0.0, b2 = 0.0;
+      for (var i = 0; i < n - lag; i += 2) {
+        final a = x[i] - mean;
+        final b = x[i + lag] - mean;
+        dot += a * b;
+        a2 += a * a;
+        b2 += b * b;
+      }
+      if (a2 > 0 && b2 > 0) {
+        final c = dot / math.sqrt(a2 * b2);
+        if (c > bestC) {
+          bestC = c;
+          best = lag;
         }
       }
     }
 
-    if(bestLag==0||bestC<.55)return null;
+    if (best == 0 || bestC < .55) return null;
 
-    var lag=bestLag.toDouble();
-    if(bestLag>1&&bestLag<n~/2){
-      final y1=_corr(x,bestLag-1,mean),y2=_corr(x,bestLag,mean),y3=_corr(x,bestLag+1,mean);
-      final d=y1-2*y2+y3;
-      if(d.abs()>1e-9)lag+=.5*(y1-y3)/d;
+    var lag = best.toDouble();
+    if (best > minLag && best < maxLag) {
+      final y1 = _corr(x, best - 1, mean);
+      final y2 = _corr(x, best, mean);
+      final y3 = _corr(x, best + 1, mean);
+      final d = y1 - 2 * y2 + y3;
+      if (d.abs() > 1e-9) {
+        lag += .5 * (y1 - y3) / d;
+      }
     }
-    return _P(sr/lag,bestC);
+
+    return _P(44100 / lag, bestC);
   }
 
   double _corr(List<int> x,int lag,double mean){
@@ -175,10 +162,6 @@ class _TunerState extends State<GuitarTunerSheet> with SingleTickerProviderState
     lastOk=false;
     busy=false;
     _samples.clear();
-    _processing=false;
-    _candidate=-1;
-    _candidateHits=0;
-    _lastPitchProcess=DateTime.fromMillisecondsSinceEpoch(0);
     selected=5;
     detected=5;
     has=false;
