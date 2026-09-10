@@ -17,6 +17,8 @@ class _GuitarPracticeHomeScreenState extends State<GuitarPracticeHomeScreen> {
   final api = GuitarPracticeApi();
   GuitarPracticeResponse? data;
   bool loading = true, syncing = false, connected = false, completedOpen = false;
+  String selectedLevel = 'All';
+  String selectedCategory = 'All';
   StreamSubscription<String>? bleSub;
 
   static const bg = Color(0xFF06131A);
@@ -54,14 +56,11 @@ class _GuitarPracticeHomeScreenState extends State<GuitarPracticeHomeScreen> {
   }
 
   Map<String, dynamic> _payload() => {
-        'date': data?.date,
-        'dailyPracticeTime': data?.dailyPracticeTime,
         'practices': (data?.practices ?? const <GuitarPractice>[]).map((p) => {
               'id': p.id,
               'title': p.title,
               'completed': p.completed,
               'suggestedTime': p.suggestedTime,
-              'duration': p.duration,
               'description': p.description,
               'dailyPracticeTime': p.dailyPracticeTime,
               'category': p.category,
@@ -72,7 +71,7 @@ class _GuitarPracticeHomeScreenState extends State<GuitarPracticeHomeScreen> {
 
   Future<void> _sync() async {
     if (syncing) return;
-    if (mounted) setState(() => syncing = true);
+    setState(() => syncing = true);
     try {
       final ble = SmartGuitarBle.instance;
       if (!ble.connected) {
@@ -121,11 +120,7 @@ class _GuitarPracticeHomeScreenState extends State<GuitarPracticeHomeScreen> {
     );
     if (value == null) return;
     try {
-      if (p == null) {
-        await api.create(value);
-      } else {
-        await api.update(p.id, value);
-      }
+      if (p == null) await api.create(value); else await api.update(p.id, value);
       await _load();
       if (connected && mounted) await _sync();
     } catch (e) {
@@ -155,14 +150,20 @@ class _GuitarPracticeHomeScreenState extends State<GuitarPracticeHomeScreen> {
     }
   }
 
-  int get _completedMinutes => (data?.practices ?? const <GuitarPractice>[]).where((p) => p.completed).fold<int>(0, (sum, p) => sum + p.duration);
-  int get _completedCount => (data?.practices ?? const <GuitarPractice>[]).where((p) => p.completed).length;
+  int get _todayMinutes => (data?.practices ?? const <GuitarPractice>[]).fold<int>(0, (sum, p) => sum + p.dailyPracticeTime);
 
-  String _time(int minutes) {
-    final h = minutes ~/ 60;
-    final m = minutes % 60;
-    return h > 0 ? '${h}h ${m}m' : '$m min';
+  List<GuitarPractice> _filtered(List<GuitarPractice> source) => source.where((p) {
+        final levelOk = selectedLevel == 'All' || p.level == selectedLevel;
+        final categoryOk = selectedCategory == 'All' || p.category == selectedCategory;
+        return levelOk && categoryOk;
+      }).toList();
+
+  List<String> get _categories {
+    final values = (data?.practices ?? const <GuitarPractice>[]).map((p) => p.category.trim()).where((v) => v.isNotEmpty).toSet().toList()..sort();
+    return ['All', ...values];
   }
+
+  String _time(int minutes) => minutes < 60 ? '$minutes min' : '${minutes ~/ 60}h ${minutes % 60}m';
 
   void _msg(String s) {
     if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(s)));
@@ -171,11 +172,8 @@ class _GuitarPracticeHomeScreenState extends State<GuitarPracticeHomeScreen> {
   @override
   Widget build(BuildContext context) {
     final all = data?.practices ?? const <GuitarPractice>[];
-    final active = all.where((p) => !p.completed).toList();
-    final completed = all.where((p) => p.completed).toList();
-    final target = data?.dailyPracticeTime ?? 0;
-    final practiced = _completedMinutes;
-    final progress = target <= 0 ? 0.0 : (practiced / target).clamp(0.0, 1.0).toDouble();
+    final active = _filtered(all.where((p) => !p.completed).toList());
+    final completed = _filtered(all.where((p) => p.completed).toList());
 
     return Scaffold(
       backgroundColor: bg,
@@ -184,11 +182,7 @@ class _GuitarPracticeHomeScreenState extends State<GuitarPracticeHomeScreen> {
         foregroundColor: Colors.white,
         elevation: 0,
         titleSpacing: 20,
-        title: const Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text('Guitar Practice', style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800)),
-          SizedBox(height: 2),
-          Text('Your daily practice plan, synced with Smart Guitar', style: TextStyle(fontSize: 12, color: muted)),
-        ]),
+        title: const Text('Guitar Practice', style: TextStyle(fontSize: 25, fontWeight: FontWeight.w800)),
         actions: [
           IconButton(tooltip: 'Sync with Smart Guitar', onPressed: syncing ? null : _sync, icon: Icon(connected ? Icons.bluetooth_connected : Icons.bluetooth_disabled, color: connected ? green : Colors.white54)),
           IconButton(tooltip: 'Refresh', onPressed: loading ? null : _load, icon: const Icon(Icons.refresh_rounded)),
@@ -201,15 +195,41 @@ class _GuitarPracticeHomeScreenState extends State<GuitarPracticeHomeScreen> {
               onRefresh: _load,
               child: ListView(
                 physics: const AlwaysScrollableScrollPhysics(),
-                padding: const EdgeInsets.fromLTRB(16, 8, 16, 100),
+                padding: const EdgeInsets.fromLTRB(16, 4, 16, 100),
                 children: [
-                  _dashboard(practiced, target, progress),
-                  const SizedBox(height: 22),
-                  Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
+                  _summary(),
+                  const SizedBox(height: 18),
+                  Row(children: [
                     const Expanded(child: Text("Today's Practice", style: TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.w800))),
-                    Text('${active.length} sessions', style: const TextStyle(color: muted)),
+                    PopupMenuButton<String>(
+                      tooltip: 'Filter',
+                      icon: const Icon(Icons.filter_list_rounded, color: Colors.white70),
+                      itemBuilder: (_) => [
+                        const PopupMenuItem(enabled: false, child: Text('Difficulty')),
+                        ...['All', 'Beginner', 'Intermediate', 'Advanced'].map((v) => CheckedPopupMenuItem(value: 'level:$v', checked: selectedLevel == v, child: Text(v))),
+                        const PopupMenuDivider(),
+                        const PopupMenuItem(enabled: false, child: Text('Category')),
+                        ..._categories.map((v) => CheckedPopupMenuItem(value: 'category:$v', checked: selectedCategory == v, child: Text(v))),
+                      ],
+                      onSelected: (v) {
+                        final parts = v.split(':');
+                        setState(() {
+                          if (parts.first == 'level') selectedLevel = parts.sublist(1).join(':');
+                          if (parts.first == 'category') selectedCategory = parts.sublist(1).join(':');
+                        });
+                      },
+                    ),
                   ]),
-                  const SizedBox(height: 12),
+                  if (selectedLevel != 'All' || selectedCategory != 'All') Padding(
+                    padding: const EdgeInsets.only(top: 6, bottom: 8),
+                    child: Row(children: [
+                      if (selectedLevel != 'All') _chip(selectedLevel, purple: true),
+                      if (selectedCategory != 'All') ...[const SizedBox(width: 6), _chip(selectedCategory)],
+                      const Spacer(),
+                      TextButton(onPressed: () => setState(() { selectedLevel = 'All'; selectedCategory = 'All'; }), child: const Text('Clear')),
+                    ]),
+                  ),
+                  const SizedBox(height: 6),
                   if (active.isEmpty) _empty() else ...active.map(_card),
                   if (completed.isNotEmpty) ...[
                     const SizedBox(height: 4),
@@ -222,75 +242,49 @@ class _GuitarPracticeHomeScreenState extends State<GuitarPracticeHomeScreen> {
     );
   }
 
-  Widget _dashboard(int practiced, int target, double progress) => LayoutBuilder(builder: (context, constraints) {
-    final narrow = constraints.maxWidth < 560;
-    final practiceBox = _box(child: Row(children: [
-      SizedBox(width: narrow ? 82 : 92, height: narrow ? 82 : 92, child: Stack(alignment: Alignment.center, children: [
-        CircularProgressIndicator(value: progress, strokeWidth: 9, backgroundColor: const Color(0xFF20353D), valueColor: const AlwaysStoppedAnimation<Color>(green)),
-        Text(_time(practiced), style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w800)),
-      ])),
-      const SizedBox(width: 14),
-      Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        const Text("Today's Practice", style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 16)),
-        Text(_time(practiced), style: const TextStyle(color: Colors.white, fontSize: 25, fontWeight: FontWeight.w800)),
-        Text('of $target min target', style: const TextStyle(color: muted)),
-        const SizedBox(height: 8),
-        ClipRRect(borderRadius: BorderRadius.circular(8), child: LinearProgressIndicator(value: progress, minHeight: 7, backgroundColor: const Color(0xFF20353D), valueColor: const AlwaysStoppedAnimation<Color>(green))),
-      ])),
-    ]));
-    final completedBox = _box(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      const Icon(Icons.check_circle_rounded, color: green, size: 28),
-      const SizedBox(height: 8),
-      const Text('Completed', style: TextStyle(color: muted, fontSize: 13)),
-      Text('$_completedCount sessions', style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.w800)),
-      Text(_time(practiced), style: const TextStyle(color: muted, fontSize: 12)),
-    ]));
-    return Column(children: [
-      if (narrow) Column(children: [practiceBox, const SizedBox(height: 10), SizedBox(width: double.infinity, child: completedBox)])
-      else Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [Expanded(flex: 5, child: practiceBox), const SizedBox(width: 10), Expanded(flex: 3, child: completedBox)]),
-      const SizedBox(height: 10),
-      Container(padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13), decoration: BoxDecoration(color: const Color(0xFF0B2420), borderRadius: BorderRadius.circular(20), border: Border.all(color: green.withAlpha(45))), child: Row(children: [
-        Icon(connected ? Icons.bluetooth_connected : Icons.bluetooth_disabled, color: connected ? green : Colors.white38),
-        const SizedBox(width: 10),
-        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [const Text('Smart Guitar', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800)), Text(connected ? 'ESP32 · Connected' : 'ESP32 · Not connected', style: const TextStyle(color: muted, fontSize: 12))])),
-        OutlinedButton.icon(onPressed: syncing ? null : _sync, icon: syncing ? const SizedBox(width: 15, height: 15, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.sync_rounded, size: 17), label: Text(syncing ? 'Syncing' : 'Sync Now')),
-      ])),
-    ]);
-  });
+  Widget _summary() => Row(children: [
+        Expanded(child: _stat(Icons.timer_outlined, _time(_todayMinutes), "Today's Practice")),
+        const SizedBox(width: 8),
+        Expanded(child: _stat(Icons.check_circle_rounded, '${data?.practices.where((p) => p.completed).length ?? 0}', 'Completed')),
+        const SizedBox(width: 8),
+        Expanded(child: _syncStat()),
+      ]);
 
-  Widget _box({required Widget child}) => Container(padding: const EdgeInsets.all(15), decoration: BoxDecoration(color: card, borderRadius: BorderRadius.circular(20), border: Border.all(color: border)), child: child);
+  Widget _stat(IconData icon, String value, String label) => Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12), decoration: BoxDecoration(color: card, borderRadius: BorderRadius.circular(18), border: Border.all(color: border)), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Icon(icon, color: green, size: 21), const SizedBox(height: 7), Text(value, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 16)), Text(label, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: muted, fontSize: 10))]));
 
-  Widget _chip(String text, {bool level = false}) {
-    if (text.trim().isEmpty) return const SizedBox.shrink();
-    return Container(padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4), decoration: BoxDecoration(color: level ? purple.withAlpha(28) : green.withAlpha(22), borderRadius: BorderRadius.circular(20), border: Border.all(color: level ? purple.withAlpha(80) : green.withAlpha(60))), child: Text(text, style: TextStyle(color: level ? purple : green, fontSize: 11, fontWeight: FontWeight.w700)));
+  Widget _syncStat() => Container(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8), decoration: BoxDecoration(color: card, borderRadius: BorderRadius.circular(18), border: Border.all(color: border)), child: Row(children: [Icon(connected ? Icons.bluetooth_connected : Icons.bluetooth_disabled, color: connected ? green : Colors.white54, size: 21), const SizedBox(width: 6), Expanded(child: TextButton(onPressed: syncing ? null : _sync, child: Text(syncing ? 'Syncing' : 'Sync', style: TextStyle(color: connected ? green : purple, fontWeight: FontWeight.w800))))]));
+
+  Widget _chip(String text, {bool purple = false}) {
+    return Container(padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4), decoration: BoxDecoration(color: (purple ? const Color(0xFFC9A7FF) : green).withAlpha(28), borderRadius: BorderRadius.circular(20)), child: Text(text, style: TextStyle(color: purple ? const Color(0xFFC9A7FF) : green, fontSize: 11, fontWeight: FontWeight.w700)));
   }
 
   Widget _card(GuitarPractice p) => Container(
-    margin: const EdgeInsets.only(bottom: 12),
-    padding: const EdgeInsets.fromLTRB(10, 10, 4, 10),
-    decoration: BoxDecoration(color: card, borderRadius: BorderRadius.circular(20), border: Border.all(color: border)),
-    child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      IconButton(onPressed: () => _toggle(p), icon: Icon(p.completed ? Icons.check_circle : Icons.radio_button_unchecked, color: p.completed ? green : Colors.white54, size: 28)),
-      const SizedBox(width: 2),
-      Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text(p.title, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white, fontSize: 17, fontWeight: FontWeight.w800)),
-        const SizedBox(height: 6),
-        Wrap(spacing: 6, runSpacing: 5, children: [_chip(p.category), _chip(p.level, level: true)]),
-        const SizedBox(height: 5),
-        Text('${p.suggestedTime}  ·  ${p.duration} min', style: const TextStyle(color: muted)),
-        if (p.description.trim().isNotEmpty) ...[const SizedBox(height: 4), Text(p.description, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(color: muted, fontSize: 13))],
-        if (p.link.trim().isNotEmpty) TextButton.icon(onPressed: () => _openLink(p.link), style: TextButton.styleFrom(padding: EdgeInsets.zero, minimumSize: const Size(0, 30), tapTargetSize: MaterialTapTargetSize.shrinkWrap), icon: const Icon(Icons.link_rounded, color: purple, size: 16), label: const Text('Open practice video', style: TextStyle(color: purple, fontWeight: FontWeight.w700))),
-      ])),
-      Column(children: [
-        if (!p.completed) IconButton(tooltip: 'Start practice', onPressed: () => _start(p), style: IconButton.styleFrom(backgroundColor: green, foregroundColor: bg), icon: const Icon(Icons.play_arrow_rounded, size: 28)),
-        PopupMenuButton<String>(onSelected: (v) { if (v == 'edit') _edit(p); if (v == 'delete') _delete(p); }, itemBuilder: (_) => const [PopupMenuItem(value: 'edit', child: Text('Edit')), PopupMenuItem(value: 'delete', child: Text('Delete'))]),
-      ]),
-    ]),
-  );
+        margin: const EdgeInsets.only(bottom: 12),
+        padding: const EdgeInsets.fromLTRB(10, 10, 4, 10),
+        decoration: BoxDecoration(color: card, borderRadius: BorderRadius.circular(20), border: Border.all(color: border)),
+        child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          IconButton(onPressed: () => _toggle(p), icon: Icon(p.completed ? Icons.check_circle : Icons.radio_button_unchecked, color: p.completed ? green : Colors.white54, size: 28)),
+          const SizedBox(width: 2),
+          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(p.title, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white, fontSize: 17, fontWeight: FontWeight.w800)),
+            const SizedBox(height: 6),
+            Wrap(spacing: 6, runSpacing: 5, children: [_chip(p.category), _chip(p.level, purple: true)]),
+            const SizedBox(height: 5),
+            Row(children: [const Icon(Icons.schedule_rounded, color: muted, size: 15), const SizedBox(width: 5), Text(p.suggestedTime.isEmpty ? 'No suggested time' : p.suggestedTime, style: const TextStyle(color: muted)), const SizedBox(width: 10), const Icon(Icons.timer_outlined, color: muted, size: 15), const SizedBox(width: 4), Text('Practiced ${_time(p.dailyPracticeTime)}', style: const TextStyle(color: muted))]),
+            if (p.description.trim().isNotEmpty) ...[const SizedBox(height: 4), Text(p.description, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(color: muted, fontSize: 13))],
+            if (p.link.trim().isNotEmpty) TextButton.icon(onPressed: () => _openLink(p.link), style: TextButton.styleFrom(padding: EdgeInsets.zero, minimumSize: const Size(0, 30), tapTargetSize: MaterialTapTargetSize.shrinkWrap), icon: const Icon(Icons.link_rounded, color: purple, size: 16), label: const Text('Open practice video', style: TextStyle(color: purple, fontWeight: FontWeight.w700))),
+          ])),
+          Column(children: [
+            if (!p.completed) IconButton(tooltip: 'Start practice', onPressed: () => _start(p), style: IconButton.styleFrom(backgroundColor: green, foregroundColor: bg), icon: const Icon(Icons.play_arrow_rounded, size: 28)),
+            PopupMenuButton<String>(onSelected: (v) { if (v == 'edit') _edit(p); if (v == 'delete') _delete(p); }, itemBuilder: (_) => const [PopupMenuItem(value: 'edit', child: Text('Edit')), PopupMenuItem(value: 'delete', child: Text('Delete'))]),
+          ]),
+        ]),
+      );
 
   Widget _completedHeader(int count) => InkWell(onTap: () => setState(() => completedOpen = !completedOpen), borderRadius: BorderRadius.circular(18), child: Container(padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16), decoration: BoxDecoration(color: card, borderRadius: BorderRadius.circular(18)), child: Row(children: [const Icon(Icons.check_circle_outline_rounded, color: Colors.white70), const SizedBox(width: 12), Expanded(child: Text('Completed ($count)', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 16))), Icon(completedOpen ? Icons.keyboard_arrow_up : Icons.keyboard_arrow_down, color: Colors.white70)])));
 
-  Widget _empty() => _box(child: const Column(children: [Icon(Icons.music_note_rounded, color: muted, size: 34), SizedBox(height: 8), Text('No active sessions today', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700))]));
+  Widget _empty() => _box(child: const Column(children: [Icon(Icons.music_note_rounded, color: muted, size: 34), SizedBox(height: 8), Text('No practice sessions match these filters', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700))]));
+  Widget _box({required Widget child}) => Container(padding: const EdgeInsets.all(15), decoration: BoxDecoration(color: card, borderRadius: BorderRadius.circular(20), border: Border.all(color: border)), child: child);
 }
 
 class _Editor extends StatefulWidget {
@@ -302,45 +296,31 @@ class _Editor extends StatefulWidget {
 class _EditorState extends State<_Editor> {
   late final title = TextEditingController(text: widget.item?.title ?? '');
   late final time = TextEditingController(text: widget.item?.suggestedTime ?? '');
-  late final duration = TextEditingController(text: widget.item?.duration.toString() ?? '');
-  late final dailyPracticeTime = TextEditingController(text: widget.item?.dailyPracticeTime.toString() ?? '95');
+  late final dailyPracticeTime = TextEditingController(text: widget.item?.dailyPracticeTime.toString() ?? '0');
   late final description = TextEditingController(text: widget.item?.description ?? '');
   late final link = TextEditingController(text: widget.item?.link ?? '');
   late final category = TextEditingController(text: widget.item?.category ?? '');
   late String level = widget.item?.level ?? '';
-
   static const levels = ['Beginner', 'Intermediate', 'Advanced'];
 
   @override
   void dispose() {
-    title.dispose(); time.dispose(); duration.dispose(); dailyPracticeTime.dispose(); description.dispose(); link.dispose(); category.dispose();
+    title.dispose(); time.dispose(); dailyPracticeTime.dispose(); description.dispose(); link.dispose(); category.dispose();
     super.dispose();
   }
 
   InputDecoration _dec(String label, IconData icon) => InputDecoration(labelText: label, prefixIcon: Icon(icon), filled: true, fillColor: const Color(0xFF142B35), border: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: BorderSide.none));
 
   void _save() {
-    final titleValue = title.text.trim();
-    final durationValue = int.tryParse(duration.text.trim());
-    final dailyValue = int.tryParse(dailyPracticeTime.text.trim());
-    if (titleValue.isEmpty) return _msg('Enter a practice title');
-    if (durationValue == null || durationValue <= 0) return _msg('Enter a valid duration in minutes');
-    if (dailyValue == null || dailyValue < 0) return _msg('Enter a valid daily practice time');
+    final t = title.text.trim();
+    final daily = int.tryParse(dailyPracticeTime.text.trim());
+    if (t.isEmpty) return _msg('Enter a practice title');
+    if (daily == null || daily < 0) return _msg('Enter a valid daily practice time');
     if (level.isEmpty) return _msg('Select a difficulty level');
-    Navigator.pop(context, {
-      'title': titleValue,
-      'suggestedTime': time.text.trim(),
-      'duration': durationValue,
-      'description': description.text.trim(),
-      'dailyPracticeTime': dailyValue,
-      'category': category.text.trim(),
-      'level': level,
-      'link': link.text.trim(),
-      'completed': widget.item?.completed ?? false,
-    });
+    Navigator.pop(context, {'title': t, 'suggestedTime': time.text.trim(), 'description': description.text.trim(), 'dailyPracticeTime': daily, 'category': category.text.trim(), 'level': level, 'link': link.text.trim(), 'completed': widget.item?.completed ?? false});
   }
 
-  void _msg(String text) => ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
+  void _msg(String s) => ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(s)));
 
   @override
   Widget build(BuildContext context) {
@@ -356,9 +336,7 @@ class _EditorState extends State<_Editor> {
       const SizedBox(height: 10),
       TextField(controller: time, decoration: _dec('Suggested time (HH:mm)', Icons.schedule), style: const TextStyle(color: Colors.white)),
       const SizedBox(height: 10),
-      TextField(controller: duration, keyboardType: TextInputType.number, decoration: _dec('Duration (minutes)', Icons.timer), style: const TextStyle(color: Colors.white)),
-      const SizedBox(height: 10),
-      TextField(controller: dailyPracticeTime, keyboardType: TextInputType.number, decoration: _dec('Daily practice time (minutes)', Icons.flag_rounded), style: const TextStyle(color: Colors.white)),
+      TextField(controller: dailyPracticeTime, keyboardType: TextInputType.number, decoration: _dec('Practice time (minutes)', Icons.timer_outlined), style: const TextStyle(color: Colors.white)),
       const SizedBox(height: 10),
       TextField(controller: description, maxLines: 4, decoration: _dec('Description', Icons.notes), style: const TextStyle(color: Colors.white)),
       const SizedBox(height: 10),
