@@ -35,9 +35,18 @@ class _GuitarPracticeHomeScreenState extends State<GuitarPracticeHomeScreen> {
   void initState() {
     super.initState();
     _load();
-    bleSub = SmartGuitarBle.instance.statusStream.listen((s) {
-      if (mounted) setState(() => connected = s == 'connected');
+    final ble = SmartGuitarBle.instance;
+    connected = ble.connected;
+    bleSub = ble.statusStream.listen((s) {
+      if (!mounted) return;
+      final isConnected = s == 'connected';
+      setState(() => connected = isConnected);
+      // Phone is the source of truth for task metadata. Every BLE connection
+      // automatically pushes the current Appwrite task snapshot to the ESP32.
+      if (isConnected) unawaited(_sync());
     });
+    // The connection may already exist before this screen was created.
+    if (connected) unawaited(_sync());
   }
 
   @override
@@ -81,6 +90,7 @@ class _GuitarPracticeHomeScreenState extends State<GuitarPracticeHomeScreen> {
 
   Future<void> _sync() async {
     if (syncing) return;
+    if (!mounted) return;
     setState(() => syncing = true);
     try {
       final ble = SmartGuitarBle.instance;
@@ -108,7 +118,7 @@ class _GuitarPracticeHomeScreenState extends State<GuitarPracticeHomeScreen> {
   }
 
   Future<void> _toggle(GuitarPractice p) async {
-    try { await api.setCompleted(p.id, !p.completed); await _load(); }
+    try { await api.setCompleted(p.id, !p.completed); await _load(); if (connected && mounted) await _sync(); }
     catch (e) { if (mounted) _msg('Update failed: $e'); }
   }
 
