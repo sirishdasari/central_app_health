@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'guitar_practice_api.dart';
 import 'smart_guitar_ble.dart';
 
@@ -37,24 +38,27 @@ class _GuitarPracticeScreenState extends State<GuitarPracticeScreen> {
     super.dispose();
   }
 
+  Map<String, dynamic> _blePayload(GuitarPracticeResponse payload) => {
+        'date': payload.date,
+        'dailyPracticeTime': payload.dailyPracticeTime,
+        'practices': payload.practices
+            .map((p) => {
+                  'id': p.id,
+                  'title': p.title,
+                  'completed': p.completed,
+                  'suggestedTime': p.suggestedTime,
+                  'duration': p.duration,
+                  'description': p.description,
+                  'dailyPracticeTime': p.dailyPracticeTime,
+                  'link': p.link,
+                })
+            .toList(),
+      };
+
   Future<void> _syncBleSilently() async {
     final payload = data;
     if (payload == null) return;
-    await SmartGuitarBle.instance.syncTasks({
-      'date': payload.date,
-      'dailyPracticeTime': payload.dailyPracticeTime,
-      'practices': payload.practices
-          .map((p) => {
-                'id': p.id,
-                'title': p.title,
-                'completed': p.completed,
-                'suggestedTime': p.suggestedTime,
-                'duration': p.duration,
-                'description': p.description,
-                'dailyPracticeTime': p.dailyPracticeTime,
-              })
-          .toList(),
-    });
+    await SmartGuitarBle.instance.syncTasks(_blePayload(payload));
   }
 
   Future<void> _pullProgressFromGuitar() async {
@@ -88,21 +92,7 @@ class _GuitarPracticeScreenState extends State<GuitarPracticeScreen> {
 
       final payload = data;
       if (payload != null) {
-        await ble.syncTasks({
-          'date': payload.date,
-          'dailyPracticeTime': payload.dailyPracticeTime,
-          'practices': payload.practices
-              .map((p) => {
-                    'id': p.id,
-                    'title': p.title,
-                    'completed': p.completed,
-                    'suggestedTime': p.suggestedTime,
-                    'duration': p.duration,
-                    'description': p.description,
-                    'dailyPracticeTime': p.dailyPracticeTime,
-                  })
-              .toList(),
-        });
+        await ble.syncTasks(_blePayload(payload));
       }
 
       if (mounted) _msg('Smart Guitar synced');
@@ -123,6 +113,17 @@ class _GuitarPracticeScreenState extends State<GuitarPracticeScreen> {
     } finally {
       if (mounted) setState(() => loading = false);
     }
+  }
+
+  Future<void> _openLink(String link) async {
+    final uri = Uri.tryParse(link.trim());
+    if (uri == null || !(uri.scheme == 'http' || uri.scheme == 'https')) {
+      _msg('Invalid practice link');
+      return;
+    }
+
+    final opened = await launchUrl(uri, mode: LaunchMode.externalApplication);
+    if (!opened && mounted) _msg('Could not open practice link');
   }
 
   Future<void> _edit([GuitarPractice? p]) async {
@@ -272,11 +273,46 @@ class _GuitarPracticeScreenState extends State<GuitarPracticeScreen> {
               fontWeight: FontWeight.w700,
             ),
           ),
-          subtitle: Text(
-            '${p.suggestedTime} · ${p.duration} min\n${p.description}',
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(color: Colors.white54),
+          subtitle: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                '${p.suggestedTime} · ${p.duration} min',
+                style: const TextStyle(color: Colors.white54),
+              ),
+              Text(
+                p.description,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(color: Colors.white54),
+              ),
+              if (p.link.trim().isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(top: 6),
+                  child: InkWell(
+                    onTap: () => _openLink(p.link),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: const [
+                        Icon(
+                          Icons.open_in_new_rounded,
+                          size: 16,
+                          color: Color(0xFF45E88F),
+                        ),
+                        SizedBox(width: 5),
+                        Text(
+                          'Open practice',
+                          style: TextStyle(
+                            color: Color(0xFF45E88F),
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+            ],
           ),
           trailing: PopupMenuButton<String>(
             onSelected: (v) {
@@ -311,6 +347,7 @@ class _EditorState extends State<_Editor> {
       TextEditingController(text: widget.item?.duration.toString() ?? '');
   late final x =
       TextEditingController(text: widget.item?.description ?? '');
+  late final l = TextEditingController(text: widget.item?.link ?? '');
 
   @override
   void dispose() {
@@ -318,12 +355,13 @@ class _EditorState extends State<_Editor> {
     s.dispose();
     d.dispose();
     x.dispose();
+    l.dispose();
     super.dispose();
   }
 
-  InputDecoration dec(String l, IconData i) => InputDecoration(
-        labelText: l,
-        prefixIcon: Icon(i),
+  InputDecoration dec(String label, IconData icon) => InputDecoration(
+        labelText: label,
+        prefixIcon: Icon(icon),
         filled: true,
         fillColor: const Color(0xFF142B35),
         border: OutlineInputBorder(
@@ -373,6 +411,12 @@ class _EditorState extends State<_Editor> {
                 decoration: dec('Description', Icons.notes),
                 style: const TextStyle(color: Colors.white),
               ),
+              TextField(
+                controller: l,
+                keyboardType: TextInputType.url,
+                decoration: dec('Practice link', Icons.link_rounded),
+                style: const TextStyle(color: Colors.white),
+              ),
               FilledButton(
                 onPressed: () {
                   final n = int.tryParse(d.text);
@@ -382,6 +426,7 @@ class _EditorState extends State<_Editor> {
                     'suggestedTime': s.text.trim(),
                     'duration': n,
                     'description': x.text.trim(),
+                    'link': l.text.trim(),
                     'completed': widget.item?.completed ?? false,
                   });
                 },
