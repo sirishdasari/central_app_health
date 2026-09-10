@@ -23,6 +23,7 @@ class _TunerState extends State<GuitarTunerSheet> with SingleTickerProviderState
   final _r=AudioRecorder(),_p=AudioPlayer(); StreamSubscription<Uint8List>? _sub;
   late final AnimationController _a; final Set<int> _done={};
   DateTime _lastNoteSwitch=DateTime.fromMillisecondsSinceEpoch(0);
+  int _candidateIndex=-1,_candidateHits=0;
   bool listen=false,has=false,ok=false,lastOk=false,busy=false; int selected=5,detected=5;
   double hz=0,cents=0,level=0;
   @override void initState(){
@@ -49,16 +50,24 @@ class _TunerState extends State<GuitarTunerSheet> with SingleTickerProviderState
     for(final v in x){final z=v-m;e+=z*z;}final rms=math.sqrt(e/x.length);final lev=(rms/1800).clamp(0.0,1.0).toDouble();
     if(rms<180){if(mounted)setState(()=>{has=false,ok=false,level=lev});return;}
     final f=_pitch(x,m);if(f==null||f<70||f>370){if(mounted)setState(()=>{has=false,ok=false,level=lev});return;}
-    final near=_near(f), manual=1200*math.log(f/_ns[selected].f)/math.ln2, idx=manual.abs()<700?selected:near;
-    final c=1200*math.log(f/_ns[idx].f)/math.ln2, tuned=c.abs()<=5;
+    final near=_near(f);
+    // Always use the nearest standard-tuning note for automatic tracking.
+    // Require two consecutive frames before changing the selected string so
+    // brief noise/harmonics do not make the UI jump between strings.
+    if(near==_candidateIndex){
+      _candidateHits++;
+    }else{
+      _candidateIndex=near;
+      _candidateHits=1;
+    }
     final now=DateTime.now();
-    final shouldFollow = idx != selected &&
-        (idx == near || manual.abs() > 180) &&
-        now.difference(_lastNoteSwitch).inMilliseconds > 220;
-    if(shouldFollow){
-      selected=idx;
+    if(near!=selected && _candidateHits>=2 &&
+        now.difference(_lastNoteSwitch).inMilliseconds>120){
+      selected=near;
       _lastNoteSwitch=now;
     }
+    final idx=near;
+    final c=1200*math.log(f/_ns[idx].f)/math.ln2, tuned=c.abs()<=5;
     if(tuned){_done.add(idx);if(!lastOk&&!busy){lastOk=true;unawaited(_chime());}}else{lastOk=false;}
     if(mounted)setState(()=>{has=true,level=lev,hz=f,cents=c,detected=idx,ok=tuned});
   }
@@ -80,6 +89,8 @@ class _TunerState extends State<GuitarTunerSheet> with SingleTickerProviderState
     cents=0;
     level=0;
     _lastNoteSwitch=DateTime.now();
+    _candidateIndex=-1;
+    _candidateHits=0;
     if(mounted)setState((){});
   }
   Future<void> _chime() async{
