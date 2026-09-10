@@ -314,8 +314,7 @@ class _TunerState extends State<GuitarTunerSheet> with SingleTickerProviderState
 
   void _reset() {
     setState(() {
-      _tuned.clear();
-      _selected = 5; _detected = 5;
+      _tuned.clear(); _selected = 5; _detected = 5;
       _verified = false; _hasSignal = false;
       _frequency = 0; _cents = 0; _confidence = 0;
       _verifyTarget = -1; _verifyFrames = 0;
@@ -430,13 +429,10 @@ class _Wave extends CustomPainter {
     final distance = active ? cents.abs().clamp(0.0, 50.0) : 50.0;
     final proximity = active ? 1.0 - distance / 50.0 : 0.0;
     final color = !active ? Colors.white54 : verified || distance <= 5 ? _green : distance <= 20 ? _amber : _red;
-
-    // The closer the pitch gets to the exact target, the larger the center
-    // grows and the wave transitions red -> amber -> green.
     final centerRadius = 12 + proximity * 11;
     final glowRadius = 35 + proximity * 55;
-    if (active) canvas.drawCircle(Offset(cx, cy), glowRadius, Paint()..color = color.withOpacity(.05 + proximity * .10));
 
+    if (active) canvas.drawCircle(Offset(cx, cy), glowRadius, Paint()..color = color.withOpacity(.05 + proximity * .10));
     final centerLine = Paint()
       ..color = verified ? _green : color
       ..strokeWidth = verified ? 4 : 3
@@ -480,13 +476,16 @@ class _Ruler extends CustomPainter {
       final value = -50 + i * 100 / 24;
       final x = (value + 50) / 100 * size.width;
       final c = value.abs() <= 5 ? green : value.abs() <= 20 ? amber : red;
-      final tick = Paint()..color = c.withOpacity(active ? 1 : .5)..strokeWidth = i.isEven ? 3 : 2;
+      final tick = Paint()
+        ..color = c.withOpacity(active ? 1 : .5)
+        ..strokeWidth = i.isEven ? 3 : 2;
       canvas.drawLine(Offset(x, y - (i.isEven ? 16 : 10)), Offset(x, y + (i.isEven ? 16 : 10)), tick);
     }
     final value = active ? cents.clamp(-50.0, 50.0) : 0.0;
     final x = (value + 50) / 100 * size.width;
-    final marker = Paint()..color = verified ? green : Colors.white70..strokeWidth = 3.5;
-    marker.strokeWidth = 3.5;
+    final marker = Paint()
+      ..color = verified ? green : Colors.white70
+      ..strokeWidth = 3.5;
     canvas.drawLine(Offset(x, 3), Offset(x, 58), marker);
     final text = const TextStyle(color: Colors.white54, fontSize: 11);
     _label(canvas, '-50', 0, 62, text, TextAlign.left);
