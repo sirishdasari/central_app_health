@@ -101,14 +101,26 @@ class _HealthScreenState extends State<HealthScreen> {
   @override Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFF06131A),
-      body: IndexedStack(
-        index: _tab,
-        children: [
+      body: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onHorizontalDragEnd: (details) {
+          final velocity = details.primaryVelocity ?? 0;
+          if (velocity.abs() < 180) return;
+          if (velocity < 0 && _tab < 3) {
+            setState(() => _tab++);
+          } else if (velocity > 0 && _tab > 0) {
+            setState(() => _tab--);
+          }
+        },
+        child: IndexedStack(
+          index: _tab,
+          children: [
           _healthView(context),
           const GuitarPracticeScreen(),
           const GuitarTunerSheet(embedded: true),
           SyncSettingsScreen(onLoggedOut: widget.onLoggedOut),
-        ],
+          ],
+        ),
       ),
       bottomNavigationBar: NavigationBar(
         selectedIndex: _tab,
