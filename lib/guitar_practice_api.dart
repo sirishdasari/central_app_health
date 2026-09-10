@@ -12,6 +12,8 @@ class GuitarPractice {
     required this.description,
     required this.dailyPracticeTime,
     required this.link,
+    required this.dailyPracticeSeconds,
+    required this.practiceDate,
   });
 
   final String id;
@@ -22,6 +24,8 @@ class GuitarPractice {
   final String description;
   final int dailyPracticeTime;
   final String link;
+  final int dailyPracticeSeconds;
+  final String practiceDate;
 
   factory GuitarPractice.fromDocument(Document document) {
     final data = document.data;
@@ -34,6 +38,10 @@ class GuitarPractice {
       description: data['description']?.toString() ?? '',
       dailyPracticeTime: (data['dailyPracticeTime'] as num?)?.toInt() ?? 0,
       link: data['link']?.toString() ?? '',
+      dailyPracticeSeconds:
+          (data['dailyPracticeSeconds'] as num?)?.toInt() ??
+          (data['todayPracticeSeconds'] as num?)?.toInt() ?? 0,
+      practiceDate: data['practiceDate']?.toString() ?? data['date']?.toString() ?? '',
     );
   }
 }
@@ -79,12 +87,8 @@ class GuitarPracticeApi {
       final result = await _databases.listDocuments(
         databaseId: AppwriteConfig.databaseId,
         collectionId: collectionId,
-        queries: [
-          Query.limit(pageSize),
-          Query.offset(offset),
-        ],
+        queries: [Query.limit(pageSize), Query.offset(offset)],
       );
-
       documents.addAll(result.documents);
       if (result.documents.length < pageSize) break;
       offset += pageSize;
@@ -98,9 +102,7 @@ class GuitarPracticeApi {
       );
     }
 
-    final practices = documents
-        .map(GuitarPractice.fromDocument)
-        .toList(growable: false);
+    final practices = documents.map(GuitarPractice.fromDocument).toList(growable: false);
 
     return GuitarPracticeResponse(
       date: _dateString(DateTime.now()),
@@ -122,10 +124,8 @@ class GuitarPracticeApi {
   Future<void> update(String id, Map<String, dynamic> value) async {
     _validateConfig();
     if (id.trim().isEmpty) throw Exception('Practice id is empty');
-
     final data = _toAppwriteData(value);
     if (data.isEmpty) return;
-
     await _databases.updateDocument(
       databaseId: AppwriteConfig.databaseId,
       collectionId: collectionId,
@@ -137,7 +137,6 @@ class GuitarPracticeApi {
   Future<void> delete(String id) async {
     _validateConfig();
     if (id.trim().isEmpty) throw Exception('Practice id is empty');
-
     await _databases.deleteDocument(
       databaseId: AppwriteConfig.databaseId,
       collectionId: collectionId,
@@ -147,31 +146,24 @@ class GuitarPracticeApi {
 
   Map<String, dynamic> _toAppwriteData(Map<String, dynamic> value) {
     final data = <String, dynamic>{};
-
-    if (value.containsKey('title')) {
-      data['sessionName'] = value['title']?.toString() ?? '';
-    }
-    if (value.containsKey('completed')) {
-      data['completed'] = value['completed'] == true;
-    }
-    if (value.containsKey('suggestedTime')) {
-      data['suggestedTime'] = value['suggestedTime']?.toString() ?? '';
-    }
+    if (value.containsKey('title')) data['sessionName'] = value['title']?.toString() ?? '';
+    if (value.containsKey('completed')) data['completed'] = value['completed'] == true;
+    if (value.containsKey('suggestedTime')) data['suggestedTime'] = value['suggestedTime']?.toString() ?? '';
     if (value.containsKey('duration')) {
       final duration = value['duration'];
       if (duration is num) data['duration'] = duration.toInt();
     }
-    if (value.containsKey('description')) {
-      data['description'] = value['description']?.toString() ?? '';
-    }
+    if (value.containsKey('description')) data['description'] = value['description']?.toString() ?? '';
     if (value.containsKey('dailyPracticeTime')) {
       final practiceTime = value['dailyPracticeTime'];
       if (practiceTime is num) data['dailyPracticeTime'] = practiceTime.toInt();
     }
-    if (value.containsKey('link')) {
-      data['link'] = value['link']?.toString().trim() ?? '';
+    if (value.containsKey('link')) data['link'] = value['link']?.toString().trim() ?? '';
+    if (value.containsKey('dailyPracticeSeconds')) {
+      final seconds = value['dailyPracticeSeconds'];
+      if (seconds is num) data['dailyPracticeSeconds'] = seconds.toInt();
     }
-
+    if (value.containsKey('practiceDate')) data['practiceDate'] = value['practiceDate']?.toString() ?? '';
     return data;
   }
 
@@ -181,16 +173,4 @@ class GuitarPracticeApi {
     final d = value.day.toString().padLeft(2, '0');
     return '$y-$m-$d';
   }
-}
-
-class _DatedDocument {
-  const _DatedDocument({
-    required this.document,
-    required this.date,
-    required this.createdAt,
-  });
-
-  final Document document;
-  final String date;
-  final DateTime createdAt;
 }
