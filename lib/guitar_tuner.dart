@@ -222,13 +222,15 @@ class _Wave extends CustomPainter{
   }
   @override bool shouldRepaint(covariant _Wave o)=>o.c!=c||o.has!=has||o.ok!=ok||o.p!=p;
 }
-class _P{const _P(this.f,this.c);final double f,c;}\n\nclass _Ruler extends CustomPainter{
+class _P{const _P(this.f,this.c);final double f,c;}
+
+class _Ruler extends CustomPainter{
   const _Ruler({required this.c,required this.active,required this.ok});final double c;final bool active,ok;
   @override void paint(Canvas x,Size s){const green=Color(0xFF19F59A),amber=Color(0xFFFFC33D),red=Color(0xFFFF6E6E);final y=30.0;
     for(var i=0;i<25;i++){final v=-50+i*100/24,px=(v+50)/100*s.width,col=v.abs()<=5?green:v.abs()<=25?amber:red;
       x.drawLine(Offset(px,y-(i%2==0?16:11)),Offset(px,y+(i%2==0?16:11)),Paint()..color=col.withOpacity(active?1:.55)..strokeWidth=i%2==0?3:2..strokeCap=StrokeCap.round);}
-    final v=active?c.clamp(-50.0,50.0):0.0,px=(v+50)/100*s.width,p=Paint()..color=ok?green:Colors.white70..strokeWidth=3.5;
-    x.drawLine(Offset(px,3),Offset(px,58),p);final path=Path()..moveTo(px-8,62)..lineTo(px+8,62)..lineTo(px,52)..close();x.drawPath(path,Paint()..color=ok?green:Colors.white70);
+    final v=active?c.clamp(-50.0,50.0):0.0,px=(v+50)/100*s.width,p=Paint()..color=(ok?green:Colors.white70)..strokeWidth=3.5;
+    x.drawLine(Offset(px,3),Offset(px,58),p);final path=Path()..moveTo(px-8,62)..lineTo(px+8,62)..lineTo(px,52)..close();x.drawPath(path,Paint()..color=(ok?green:Colors.white70));
     _t(x,s,'-50',0,TextAlign.left);_t(x,s,'-25',.25,TextAlign.center);_t(x,s,'-5',.45,TextAlign.center);_t(x,s,'+5',.55,TextAlign.center);_t(x,s,'+25',.75,TextAlign.center);_t(x,s,'+50',1,TextAlign.right);
   }
   void _t(Canvas x,Size s,String z,double f,TextAlign a){final q=TextPainter(text:TextSpan(text:z,style:const TextStyle(color:Colors.white54,fontSize:11)),textDirection:TextDirection.ltr)..layout();final px=f*s.width-(a==TextAlign.left?0:a==TextAlign.right?q.width:q.width/2);q.paint(x,Offset(px,63));}
