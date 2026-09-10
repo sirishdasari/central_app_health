@@ -138,6 +138,18 @@ class SmartGuitarBle {
     try {
       device = d;
 
+      // autoConnect cannot take an MTU argument. Explicitly negotiate one
+      // after the connection is established so sync is not stuck at MTU 23
+      // (20-byte ATT payload).
+      if (d.mtuNow < 247) {
+        try {
+          await d.requestMtu(247);
+        } catch (_) {
+          // Keep going. Sync code below dynamically falls back to the
+          // currently negotiated MTU if the request is rejected.
+        }
+      }
+
       // FlutterBluePlus requires service discovery again after every BLE
       // reconnection.
       final services = await d.discoverServices();
@@ -340,34 +352,66 @@ class SmartGuitarBle {
     }
   }
 
+  List<String> _chunkUtf8(String value, int maxBytes) {
+    final chunks = <String>[];
+    final current = StringBuffer();
+    var currentBytes = 0;
+
+    for (final rune in value.runes) {
+      final char = String.fromCharCode(rune);
+      final bytes = utf8.encode(char);
+
+      if (current.isNotEmpty && currentBytes + bytes.length > maxBytes) {
+        chunks.add(current.toString());
+        current.clear();
+        currentBytes = 0;
+      }
+
+      current.write(char);
+      currentBytes += bytes.length;
+    }
+
+    if (current.isNotEmpty) {
+      chunks.add(current.toString());
+    }
+
+    return chunks;
+  }
+
   Future<void> syncTasks(Map<String, dynamic> apiPayload) async {
     final w = control;
+    final d = device;
 
-    if (w == null) {
+    if (w == null || d == null || !d.isConnected) {
       throw Exception('Smart Guitar is not connected');
     }
 
+    // The ESP32 control characteristic supports both write modes. Use
+    // Write Without Response for bulk chunks; this avoids the 20-byte
+    // response-write limit and is safe because each chunk is appended in
+    // order on the ESP32.
     await w.write(
       utf8.encode('SYNC_BEGIN'),
-      withoutResponse: false,
+      withoutResponse: true,
     );
 
     final json = jsonEncode(apiPayload);
-    const size = 170;
+    final mtuPayload = d.mtuNow > 3 ? d.mtuNow - 3 : 20;
+    final maxWritePayload = mtuPayload.clamp(1, 180).toInt();
+    const prefix = 'SYNC_CHUNK:';
+    final prefixBytes = utf8.encode(prefix).length;
+    final chunkDataBytes = (maxWritePayload - prefixBytes).clamp(1, 180).toInt();
 
-    for (var i = 0; i < json.length; i += size) {
-      final end = (i + size > json.length) ? json.length : i + size;
-      final part = json.substring(i, end);
-
+    for (final part in _chunkUtf8(json, chunkDataBytes)) {
       await w.write(
-        utf8.encode('SYNC_CHUNK:$part'),
-        withoutResponse: false,
+        utf8.encode('$prefix$part'),
+        withoutResponse: true,
       );
     }
 
     await w.write(
       utf8.encode('SYNC_END'),
-      withoutResponse: false,
+      withoutResponse: true,
     );
   }
 }
