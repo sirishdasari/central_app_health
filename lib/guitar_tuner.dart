@@ -222,7 +222,7 @@ class _Wave extends CustomPainter{
   }
   @override bool shouldRepaint(covariant _Wave o)=>o.c!=c||o.has!=has||o.ok!=ok||o.p!=p;
 }
-class _Ruler extends CustomPainter{
+class _P{const _P(this.f,this.c);final double f,c;}\n\nclass _Ruler extends CustomPainter{
   const _Ruler({required this.c,required this.active,required this.ok});final double c;final bool active,ok;
   @override void paint(Canvas x,Size s){const green=Color(0xFF19F59A),amber=Color(0xFFFFC33D),red=Color(0xFFFF6E6E);final y=30.0;
     for(var i=0;i<25;i++){final v=-50+i*100/24,px=(v+50)/100*s.width,col=v.abs()<=5?green:v.abs()<=25?amber:red;
