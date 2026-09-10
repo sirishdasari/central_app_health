@@ -156,8 +156,8 @@ class _TunerState extends State<GuitarTunerSheet> with SingleTickerProviderState
         ? pitch.hz
         : _smoothedFrequency * 0.72 + pitch.hz * 0.28;
 
-    // The detected note must match the selected string. This is what prevents
-    // low E/A from checking high E: the octave/string index must match too.
+    // The detected note must match the selected string. This prevents low E/A
+    // from checking high E: the octave/string index must match too.
     final correctString = actual == _selected && targetCents.abs() <= 50;
     if (correctString) {
       if (_verifyTarget == _selected) {
@@ -171,9 +171,7 @@ class _TunerState extends State<GuitarTunerSheet> with SingleTickerProviderState
       _verifyFrames = 0;
     }
 
-    final verified = correctString &&
-        _verifyFrames >= _requiredFrames &&
-        targetCents.abs() <= 5;
+    final verified = correctString && _verifyFrames >= _requiredFrames && targetCents.abs() <= 5;
 
     if (mounted) {
       setState(() {
@@ -433,13 +431,17 @@ class _Wave extends CustomPainter {
     final proximity = active ? 1.0 - distance / 50.0 : 0.0;
     final color = !active ? Colors.white54 : verified || distance <= 5 ? _green : distance <= 20 ? _amber : _red;
 
-    // As the pitch approaches the exact target, the center grows and the
-    // whole wave transitions red -> amber -> green.
+    // The closer the pitch gets to the exact target, the larger the center
+    // grows and the wave transitions red -> amber -> green.
     final centerRadius = 12 + proximity * 11;
     final glowRadius = 35 + proximity * 55;
     if (active) canvas.drawCircle(Offset(cx, cy), glowRadius, Paint()..color = color.withOpacity(.05 + proximity * .10));
 
-    canvas.drawLine(Offset(cx, 8), Offset(cx, size.height - 8), Paint()..color = verified ? _green : color..strokeWidth = verified ? 4 : 3..strokeCap = StrokeCap.round);
+    final centerLine = Paint()
+      ..color = verified ? _green : color
+      ..strokeWidth = verified ? 4 : 3
+      ..strokeCap = StrokeCap.round;
+    canvas.drawLine(Offset(cx, 8), Offset(cx, size.height - 8), centerLine);
     canvas.drawCircle(Offset(cx, cy), centerRadius, Paint()..color = color);
 
     const bars = 17;
@@ -451,7 +453,11 @@ class _Wave extends CustomPainter {
       final height = active ? 22 + pulse * (38 + proximity * 60) * (.55 + distanceFromCenter * .45) : 16 + distanceFromCenter * 12;
       final x = 10 + normalized * (size.width - 20);
       final barColor = active ? color.withOpacity(.45 + distanceFromCenter * .45) : Colors.white54;
-      canvas.drawLine(Offset(x, cy - height / 2), Offset(x, cy + height / 2), Paint()..color = barColor..strokeWidth = 4..strokeCap = StrokeCap.round);
+      final barPaint = Paint()
+        ..color = barColor
+        ..strokeWidth = 4
+        ..strokeCap = StrokeCap.round;
+      canvas.drawLine(Offset(x, cy - height / 2), Offset(x, cy + height / 2), barPaint);
     }
   }
 
@@ -474,7 +480,8 @@ class _Ruler extends CustomPainter {
       final value = -50 + i * 100 / 24;
       final x = (value + 50) / 100 * size.width;
       final c = value.abs() <= 5 ? green : value.abs() <= 20 ? amber : red;
-      canvas.drawLine(Offset(x, y - (i.isEven ? 16 : 10)), Offset(x, y + (i.isEven ? 16 : 10)), Paint()..color = c.withOpacity(active ? 1 : .5)..strokeWidth = i.isEven ? 3 : 2);
+      final tick = Paint()..color = c.withOpacity(active ? 1 : .5)..strokeWidth = i.isEven ? 3 : 2;
+      canvas.drawLine(Offset(x, y - (i.isEven ? 16 : 10)), Offset(x, y + (i.isEven ? 16 : 10)), tick);
     }
     final value = active ? cents.clamp(-50.0, 50.0) : 0.0;
     final x = (value + 50) / 100 * size.width;
