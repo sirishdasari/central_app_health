@@ -19,15 +19,10 @@ import 'package:record/record.dart';
 /// - frequency + cents
 /// - +/-50 cents ruler
 /// - E A D G B E string selector
-/// - green success only after the SELECTED string is verified for several
-///   consecutive frames at the correct octave and within +/-5 cents
-/// - one short system click when a selected string is successfully verified
+/// - simple selected-string tuning tolerance
+/// - one short system click when a selected string is successfully tuned
 class GuitarTunerSheet extends StatefulWidget {
-  const GuitarTunerSheet({
-    super.key,
-    this.embedded = false,
-    this.onClose,
-  });
+  const GuitarTunerSheet({super.key, this.embedded = false, this.onClose});
 
   final bool embedded;
   final VoidCallback? onClose;
@@ -81,21 +76,11 @@ class _GuitarTunerSheetState extends State<GuitarTunerSheet>
   int _selectedString = 5;
   int _detectedString = 5;
 
-  // Strings that have been successfully tuned during this tuner session.
   final Set<int> _tunedStrings = <int>{};
-
-  // A tick is only awarded after the selected string has been detected
-  // consistently. This prevents octave errors or another string from being
-  // marked tuned.
-  int _verificationString = -1;
-  int _verificationFrames = 0;
-  static const int _requiredVerificationFrames = 3;
 
   double _frequency = 0;
   double _cents = 0;
   double _signal = 0;
-
-  // Smoothed pitch prevents the UI from jumping around between samples.
   double _smoothedFrequency = 0;
   double _smoothedCents = 0;
 
@@ -183,8 +168,6 @@ class _GuitarTunerSheetState extends State<GuitarTunerSheet>
       _signal = 0;
       _smoothedFrequency = 0;
       _smoothedCents = 0;
-      _verificationString = -1;
-      _verificationFrames = 0;
     });
   }
 
@@ -198,8 +181,6 @@ class _GuitarTunerSheetState extends State<GuitarTunerSheet>
       _lastInTune = false;
       _smoothedFrequency = 0;
       _smoothedCents = 0;
-      _verificationString = -1;
-      _verificationFrames = 0;
     });
   }
 
@@ -227,7 +208,6 @@ class _GuitarTunerSheetState extends State<GuitarTunerSheet>
     final rms = math.sqrt(energy / samples.length);
     final signal = (rms / 1800).clamp(0.0, 1.0);
 
-    // Proven working path: rolling 4096-sample window.
     _sampleBuffer.addAll(samples);
     const windowSize = 4096;
     if (_sampleBuffer.length > windowSize * 2) {
@@ -240,8 +220,6 @@ class _GuitarTunerSheetState extends State<GuitarTunerSheet>
     );
 
     if (rms < 180) {
-      _verificationString = -1;
-      _verificationFrames = 0;
       if (mounted) {
         setState(() {
           _hasSignal = false;
@@ -255,8 +233,6 @@ class _GuitarTunerSheetState extends State<GuitarTunerSheet>
     final pitch = _detectPitch(analysisSamples, sampleRate: 44100);
 
     if (pitch == null || pitch < 70 || pitch > 370) {
-      _verificationString = -1;
-      _verificationFrames = 0;
       if (mounted) {
         setState(() {
           _hasSignal = false;
@@ -286,26 +262,8 @@ class _GuitarTunerSheetState extends State<GuitarTunerSheet>
     _smoothedFrequency = smoothed;
     _smoothedCents = smoothedActualCents;
 
-    // The selected string must match the detected string and be within
-    // +/-50 cents before verification can start.
-    final candidateMatchesTarget =
-        actualIndex == targetIndex && targetCents.abs() <= 50.0;
-
-    if (candidateMatchesTarget) {
-      if (_verificationString == targetIndex) {
-        _verificationFrames++;
-      } else {
-        _verificationString = targetIndex;
-        _verificationFrames = 1;
-      }
-    } else {
-      _verificationString = -1;
-      _verificationFrames = 0;
-    }
-
-    final verified = candidateMatchesTarget &&
-        _verificationFrames >= _requiredVerificationFrames &&
-        targetCents.abs() <= 5.0;
+    // Small practical correction only: no multi-frame/perfect verification.
+    final verified = actualIndex == targetIndex && targetCents.abs() <= 10.0;
 
     if (mounted) {
       setState(() {
@@ -322,9 +280,6 @@ class _GuitarTunerSheetState extends State<GuitarTunerSheet>
       _tunedStrings.add(targetIndex);
       if (!_lastInTune && !_playingSuccess) {
         _lastInTune = true;
-        // Keep audio feedback completely outside the microphone/audio-player
-        // path. AudioPlayer can compete with Android AudioRecord and interrupt
-        // the stream, which was the source of the intermittent tuner freeze.
         Future<void>.microtask(_playSuccessChime);
       }
     } else {
@@ -332,9 +287,6 @@ class _GuitarTunerSheetState extends State<GuitarTunerSheet>
     }
   }
 
-  // Proven detector from the original working speedometer tuner:
-  // 4096-sample autocorrelation, 70-500 Hz range, correlation threshold .55,
-  // and parabolic lag refinement.
   double? _detectPitch(
     Int16List input, {
     required int sampleRate,
@@ -436,8 +388,6 @@ class _GuitarTunerSheetState extends State<GuitarTunerSheet>
   }
 
   Future<void> _playSuccessChime() async {
-    // IMPORTANT: do not use AudioPlayer while AudioRecorder is streaming.
-    // Android can switch/compete for the audio route and interrupt the tuner.
     _playingSuccess = true;
     try {
       await SystemSound.play(SystemSoundType.click);
@@ -496,19 +446,13 @@ class _GuitarTunerSheetState extends State<GuitarTunerSheet>
                     onPressed: () {
                       setState(() {
                         _tunedStrings.clear();
-                        _selectedString = 5;
-                        _detectedString = 5;
                         _inTune = false;
-                        _lastInTune = false;
                         _hasSignal = false;
                         _frequency = 0;
                         _cents = 0;
                         _signal = 0;
                         _smoothedFrequency = 0;
                         _smoothedCents = 0;
-                        _verificationString = -1;
-                        _verificationFrames = 0;
-                        _sampleBuffer.clear();
                       });
                     },
                     icon: const Icon(Icons.restart_alt_rounded,
@@ -586,10 +530,10 @@ class _GuitarTunerSheetState extends State<GuitarTunerSheet>
                         height: 170,
                         width: double.infinity,
                         child: CustomPaint(
-                          painter: _Wave(
+                          painter: _WavePainter(
                             cents: _cents,
                             active: _hasSignal,
-                            verified: _inTune,
+                            inTune: _inTune,
                             phase: _waveController.value,
                           ),
                         ),
@@ -599,134 +543,87 @@ class _GuitarTunerSheetState extends State<GuitarTunerSheet>
                       _hasSignal ? detected.note : '—',
                       style: TextStyle(
                         color: color,
-                        fontSize: 82,
-                        height: .95,
+                        fontSize: 78,
+                        height: .9,
                         fontWeight: FontWeight.w900,
                       ),
                     ),
+                    const SizedBox(height: 4),
                     Text(
                       _hasSignal
                           ? '${_frequency.toStringAsFixed(1)} Hz'
                           : '— Hz',
                       style: const TextStyle(
                         color: Colors.white70,
-                        fontSize: 19,
+                        fontSize: 24,
                         fontWeight: FontWeight.w700,
                       ),
                     ),
+                    const SizedBox(height: 2),
                     Text(
                       _hasSignal
                           ? '${_cents >= 0 ? '+' : ''}${_cents.toStringAsFixed(1)} cents'
                           : '— cents',
                       style: TextStyle(
                         color: color,
-                        fontSize: 18,
+                        fontSize: 19,
                         fontWeight: FontWeight.w800,
                       ),
                     ),
-                    const SizedBox(height: 12),
+                    const SizedBox(height: 8),
                     SizedBox(
-                      height: 72,
-                      width: double.infinity,
+                      height: 76,
                       child: CustomPaint(
-                        painter: _Ruler(_cents, _hasSignal, _inTune),
+                        painter: _CentsRulerPainter(
+                          cents: _cents,
+                          active: _hasSignal,
+                          inTune: _inTune,
+                        ),
+                        child: const SizedBox.expand(),
                       ),
                     ),
                     const SizedBox(height: 4),
                     Row(
-                      children: List.generate(_strings.length, (i) {
-                        final item = _strings[i];
-                        final selectedCard = i == _selectedString;
-                        final tuned = _tunedStrings.contains(i);
+                      children: List.generate(_strings.length, (index) {
+                        final string = _strings[index];
+                        final selectedTile = index == _selectedString;
+                        final tuned = _tunedStrings.contains(index);
                         return Expanded(
                           child: Padding(
-                            padding: EdgeInsets.only(right: i == 5 ? 0 : 6),
-                            child: GestureDetector(
-                              onTap: () => _selectString(i),
-                              child: AnimatedContainer(
-                                duration: const Duration(milliseconds: 160),
-                                padding:
-                                    const EdgeInsets.symmetric(vertical: 10),
-                                decoration: BoxDecoration(
-                                  color: tuned
-                                      ? const Color(0xFF123B2B)
-                                      : const Color(0xFF0C222D),
-                                  borderRadius: BorderRadius.circular(14),
-                                  border: Border.all(
-                                    color: selectedCard
-                                        ? color
-                                        : const Color(0xFF193642),
-                                    width: selectedCard ? 2 : 1,
-                                  ),
-                                ),
-                                child: Column(
-                                  children: [
-                                    Row(
-                                      mainAxisAlignment:
-                                          MainAxisAlignment.center,
-                                      children: [
-                                        Text(
-                                          item.note,
-                                          style: TextStyle(
-                                            color: tuned
-                                                ? const Color(0xFF19F59A)
-                                                : Colors.white,
-                                            fontSize: 22,
-                                            fontWeight: FontWeight.w900,
-                                          ),
-                                        ),
-                                        if (tuned) ...[
-                                          const SizedBox(width: 3),
-                                          const Icon(Icons.check_rounded,
-                                              color: Color(0xFF19F59A), size: 17),
-                                        ],
-                                      ],
-                                    ),
-                                    Text(
-                                      '${item.number}',
-                                      style: const TextStyle(
-                                        color: Colors.white54,
-                                        fontSize: 12,
-                                        fontWeight: FontWeight.w700,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
+                            padding: EdgeInsets.only(
+                              left: index == 0 ? 0 : 4,
+                              right: index == _strings.length - 1 ? 0 : 4,
+                            ),
+                            child: _StringTile(
+                              string: string,
+                              selected: selectedTile,
+                              tuned: tuned,
+                              onTap: () => _selectString(index),
                             ),
                           ),
                         );
                       }),
                     ),
-                    const SizedBox(height: 12),
+                    const SizedBox(height: 10),
                     AnimatedOpacity(
-                      opacity: _inTune ? 1 : 0,
-                      duration: const Duration(milliseconds: 180),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: const [
-                          Icon(Icons.check_circle,
-                              color: Color(0xFF19F59A), size: 28),
-                          SizedBox(width: 8),
-                          Text(
-                            'In tune!',
-                            style: TextStyle(
-                              color: Color(0xFF19F59A),
-                              fontSize: 17,
-                              fontWeight: FontWeight.w900,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 6),
-                    Text(
-                      _signal > 0
-                          ? 'Signal ${(_signal * 100).clamp(0, 100).toStringAsFixed(0)}%'
-                          : 'Standard tuning • E A D G B E',
-                      style: const TextStyle(
-                        color: Colors.white30,
-                        fontSize: 11,
+                      opacity: _hasSignal ? 1 : .7,
+                      duration: const Duration(milliseconds: 150),
+                      child: Text(
+                        _hasSignal
+                            ? (wrongString
+                                ? 'Select the detected string'
+                                : _inTune
+                                    ? '✓  In tune!'
+                                    : _cents < 0
+                                        ? 'Tune up'
+                                        : 'Tune down')
+                            : 'Tap the microphone and pluck one string at a time.',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          color: color,
+                          fontSize: 14,
+                          fontWeight: FontWeight.w700,
+                        ),
                       ),
                     ),
                   ],
@@ -746,192 +643,252 @@ class _Info extends StatelessWidget {
   final String value;
 
   @override
-  Widget build(BuildContext context) => Container(
-        padding: const EdgeInsets.symmetric(vertical: 8),
-        decoration: BoxDecoration(
-          color: const Color(0xFF0C222D),
-          borderRadius: BorderRadius.circular(13),
-          border: Border.all(color: const Color(0xFF193642)),
-        ),
-        child: Column(
-          children: [
-            Text(
-              label,
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0C222D),
+        borderRadius: BorderRadius.circular(13),
+        border: Border.all(color: const Color(0xFF193642)),
+      ),
+      child: Column(
+        children: [
+          Text(label,
               style: const TextStyle(
-                color: Colors.white30,
-                fontSize: 9,
-                fontWeight: FontWeight.w800,
-                letterSpacing: 1,
-              ),
-            ),
-            const SizedBox(height: 2),
-            Text(
-              value,
+                  color: Colors.white30,
+                  fontSize: 9,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: 1)),
+          const SizedBox(height: 2),
+          Text(value,
               style: const TextStyle(
-                color: Colors.white,
-                fontSize: 14,
-                fontWeight: FontWeight.w800,
-              ),
-            ),
-          ],
-        ),
-      );
+                  color: Colors.white,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w800)),
+        ],
+      ),
+    );
+  }
 }
 
-class _Wave extends CustomPainter {
-  const _Wave({
+class _StringTile extends StatelessWidget {
+  const _StringTile({
+    required this.string,
+    required this.selected,
+    required this.tuned,
+    required this.onTap,
+  });
+
+  final _TuningString string;
+  final bool selected;
+  final bool tuned;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final border = tuned
+        ? const Color(0xFF19F59A)
+        : selected
+            ? const Color(0xFF5C7884)
+            : const Color(0xFF193642);
+    final background = tuned
+        ? const Color(0xFF083526)
+        : selected
+            ? const Color(0xFF102A35)
+            : const Color(0xFF0C222D);
+
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(16),
+      child: Container(
+        height: 64,
+        decoration: BoxDecoration(
+          color: background,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: border, width: tuned || selected ? 2 : 1),
+        ),
+        child: Stack(
+          children: [
+            Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Text(string.note,
+                      style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 23,
+                          fontWeight: FontWeight.w900)),
+                  Text('${string.number}',
+                      style: const TextStyle(
+                          color: Colors.white54,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700)),
+                ],
+              ),
+            ),
+            if (tuned)
+              const Positioned(
+                top: 5,
+                right: 7,
+                child: Icon(Icons.check_circle,
+                    size: 15, color: Color(0xFF19F59A)),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _WavePainter extends CustomPainter {
+  const _WavePainter({
     required this.cents,
     required this.active,
-    required this.verified,
+    required this.inTune,
     required this.phase,
   });
 
   final double cents;
   final bool active;
-  final bool verified;
+  final bool inTune;
   final double phase;
 
   @override
   void paint(Canvas canvas, Size size) {
-    final centerX = size.width / 2;
-    final centerY = size.height / 2;
-    final distance = (cents / 50).clamp(-1.0, 1.0);
-    final distanceFromCenter = distance.abs();
-    final proximity = 1.0 - distanceFromCenter;
-
+    final center = Offset(size.width / 2, size.height / 2);
     final color = !active
         ? Colors.white54
-        : verified || distanceFromCenter <= .10
+        : inTune || cents.abs() <= 5
             ? const Color(0xFF19F59A)
-            : distanceFromCenter <= .40
+            : cents.abs() <= 20
                 ? const Color(0xFFFFC33D)
                 : const Color(0xFFFF6E6E);
 
+    final distance = (cents.abs() / 50).clamp(0.0, 1.0);
+    final proximity = 1.0 - distance;
+    final radius = 12 + proximity * 11;
+
     final line = Paint()
-      ..color = verified ? const Color(0xFF19F59A) : Colors.white70
-      ..strokeWidth = verified ? 4 : 2
+      ..color = inTune ? color : Colors.white70
+      ..strokeWidth = inTune ? 4 : 2
       ..strokeCap = StrokeCap.round;
     canvas.drawLine(
-      Offset(centerX, 8),
-      Offset(centerX, size.height - 8),
+      Offset(center.dx, 8),
+      Offset(center.dx, size.height - 8),
       line,
     );
 
-    const bars = 31;
-    final pulse = .88 + .12 * math.sin(phase * math.pi * 2);
-    for (var i = 0; i < bars; i++) {
-      final normalized = i / (bars - 1);
-      final fromCenter = (normalized - .5).abs() * 2;
-      final envelope = math.max(0.10, 1 - fromCenter * 1.35);
-      final phaseOffset = math.sin((i * .75) + phase * math.pi * 2);
-      final height = active
-          ? 18 + pulse * (36 + proximity * 62) * envelope *
-              (.72 + .28 * phaseOffset.abs())
-          : 16 + envelope * 10;
+    canvas.drawCircle(
+      center,
+      radius,
+      Paint()..color = color.withOpacity(.24 + proximity * .2),
+    );
+    canvas.drawCircle(center, radius * .58, Paint()..color = color);
+
+    const count = 31;
+    for (var i = 0; i < count; i++) {
+      final normalized = i / (count - 1);
       final x = 10 + normalized * (size.width - 20);
+      final side = (normalized - .5).abs() * 2;
+      final pulse = .72 + .28 *
+          math.sin((phase * math.pi * 2) + (normalized * math.pi * 6));
+      final height = active
+          ? 22 + pulse * (38 + proximity * 60) * (.55 + side * .45)
+          : 16 + side * 12;
       final barColor = active
-          ? color.withOpacity(.45 + envelope * .55)
+          ? color.withOpacity(.45 + side * .45)
           : Colors.white54;
       final barPaint = Paint()
         ..color = barColor
         ..strokeWidth = 4
         ..strokeCap = StrokeCap.round;
       canvas.drawLine(
-        Offset(x, centerY - height / 2),
-        Offset(x, centerY + height / 2),
+        Offset(x, center.dy - height / 2),
+        Offset(x, center.dy + height / 2),
         barPaint,
       );
     }
-
-    final radius = 10 + proximity * 14;
-    final glow = Paint()
-      ..color = color.withOpacity(active ? .18 + proximity * .22 : .08)
-      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 14);
-    canvas.drawCircle(Offset(centerX, centerY), radius + 7, glow);
-
-    final dot = Paint()..color = color.withOpacity(active ? .95 : .35);
-    canvas.drawCircle(Offset(centerX, centerY), radius, dot);
   }
 
   @override
-  bool shouldRepaint(covariant _Wave old) =>
-      old.cents != cents ||
-      old.active != active ||
-      old.verified != verified ||
-      old.phase != phase;
+  bool shouldRepaint(covariant _WavePainter oldDelegate) {
+    return oldDelegate.cents != cents ||
+        oldDelegate.active != active ||
+        oldDelegate.inTune != inTune ||
+        oldDelegate.phase != phase;
+  }
 }
 
-class _Ruler extends CustomPainter {
-  const _Ruler(this.cents, this.active, this.verified);
+class _CentsRulerPainter extends CustomPainter {
+  const _CentsRulerPainter({
+    required this.cents,
+    required this.active,
+    required this.inTune,
+  });
+
   final double cents;
   final bool active;
-  final bool verified;
+  final bool inTune;
 
   @override
   void paint(Canvas canvas, Size size) {
-    final centerY = 25.0;
     final centerX = size.width / 2;
+    final markerX = centerX + (cents.clamp(-50.0, 50.0) / 50.0) *
+        (size.width / 2 - 8);
 
     final tickPaint = Paint()
-      ..strokeWidth = 4
+      ..strokeWidth = 3
       ..strokeCap = StrokeCap.round;
 
-    for (var i = -20; i <= 20; i++) {
-      final fraction = (i + 20) / 40;
+    for (var i = 0; i <= 20; i++) {
+      final fraction = i / 20;
       final x = fraction * size.width;
-      final absCents = (i * 2.5).abs();
-      tickPaint.color = !active
-          ? Colors.white24
-          : absCents <= 5
-              ? const Color(0xFF19F59A)
-              : absCents <= 20
-                  ? const Color(0xFFFFC33D)
-                  : const Color(0xFFFF6E6E);
-      final h = i % 4 == 0 ? 35.0 : 25.0;
-      canvas.drawLine(
-        Offset(x, centerY - h / 2),
-        Offset(x, centerY + h / 2),
-        tickPaint,
-      );
+      final tickCents = -50 + i * 5;
+      final tickColor = tickCents.abs() <= 5
+          ? const Color(0xFF19F59A)
+          : tickCents.abs() <= 20
+              ? const Color(0xFFFFC33D)
+              : const Color(0xFFFF6E6E);
+      tickPaint.color = tickColor;
+      final h = tickCents % 10 == 0 ? 52.0 : 35.0;
+      canvas.drawLine(Offset(x, 4), Offset(x, h), tickPaint);
     }
 
-    if (!active) return;
-
-    final fraction = ((cents.clamp(-50.0, 50.0) + 50.0) / 100.0);
-    final x = fraction * size.width;
     final marker = Paint()
-      ..color = verified ? const Color(0xFF19F59A) : Colors.white
-      ..strokeWidth = verified ? 5 : 4
+      ..color = active
+          ? (inTune ? const Color(0xFF19F59A) : Colors.white)
+          : Colors.white38
+      ..strokeWidth = inTune ? 5 : 4
       ..strokeCap = StrokeCap.round;
-    canvas.drawLine(Offset(x, 3), Offset(x, 58), marker);
 
-    final text = const TextStyle(color: Colors.white54, fontSize: 11);
-    _label(canvas, '-50', 0, 62, text, TextAlign.left);
-    _label(canvas, '0', centerX, 62, text, TextAlign.center);
-    _label(canvas, '+50', size.width, 62, text, TextAlign.right);
+    canvas.drawLine(Offset(markerX, 3), Offset(markerX, 58), marker);
+
+    const text = TextStyle(color: Colors.white54, fontSize: 11);
+    _label(canvas, size, '-50', 0, Alignment.centerLeft, text);
+    _label(canvas, size, '0', .5, Alignment.center, text);
+    _label(canvas, size, '+50', 1, Alignment.centerRight, text);
   }
 
-  void _label(
-    Canvas canvas,
-    String value,
-    double x,
-    double y,
-    TextStyle style,
-    TextAlign align,
-  ) {
-    final p = TextPainter(
+  void _label(Canvas canvas, Size size, String value, double fraction,
+      Alignment alignment, TextStyle style) {
+    final painter = TextPainter(
       text: TextSpan(text: value, style: style),
       textDirection: TextDirection.ltr,
     )..layout();
-    final dx = align == TextAlign.left
+
+    final x = fraction * size.width;
+    final left = alignment == Alignment.centerLeft
         ? x
-        : align == TextAlign.right
-            ? x - p.width
-            : x - p.width / 2;
-    p.paint(canvas, Offset(dx, y));
+        : alignment == Alignment.centerRight
+            ? x - painter.width
+            : x - painter.width / 2;
+    painter.paint(canvas, Offset(left, 63));
   }
 
   @override
-  bool shouldRepaint(covariant _Ruler old) =>
-      old.cents != cents || old.active != active || old.verified != verified;
+  bool shouldRepaint(covariant _CentsRulerPainter oldDelegate) {
+    return oldDelegate.cents != cents ||
+        oldDelegate.active != active ||
+        oldDelegate.inTune != inTune;
+  }
 }
