@@ -23,6 +23,9 @@ class _TunerState extends State<GuitarTunerSheet> with SingleTickerProviderState
   final _r=AudioRecorder(),_p=AudioPlayer(); StreamSubscription<Uint8List>? _sub;
   late final AnimationController _a; final Set<int> _done={};
   DateTime _lastNoteSwitch=DateTime.fromMillisecondsSinceEpoch(0);
+  DateTime _lastPitchProcess=DateTime.fromMillisecondsSinceEpoch(0);
+  bool _processing=false;
+  int _candidate=-1, _candidateHits=0;
   bool listen=false,has=false,ok=false,lastOk=false,busy=false; int selected=5,detected=5;
   double hz=0,cents=0,level=0;
   @override void initState(){
@@ -44,46 +47,68 @@ class _TunerState extends State<GuitarTunerSheet> with SingleTickerProviderState
     if(mounted)setState(()=>{listen=false,has=false,ok=false,hz=0,cents=0,level=0,lastOk=false});
   }
   void _pcm(Uint8List bytes){
-    // Keep a rolling 4096-sample window. The original tuner processed a
-    // stable window instead of trying to estimate pitch from each stream
-    // packet independently.
     for(var i=0;i+1<bytes.length;i+=2){
       final v=bytes[i]|(bytes[i+1]<<8);
       _samples.add(v>32767?v-65536:v);
     }
+
+    // AudioRecord can deliver packets much faster than the pitch algorithm
+    // can process them. The old speedometer tuner effectively behaved like
+    // this: analyze a stable window, then update the UI. Throttle the work
+    // so the UI/audio stream cannot be starved by overlapping autocorrelation.
     const n=4096;
-    if(_samples.length<n)return;
+    if(_samples.length<n||_processing)return;
+    final now=DateTime.now();
+    if(now.difference(_lastPitchProcess).inMilliseconds<90)return;
+    _lastPitchProcess=now;
+
     if(_samples.length>n*2)_samples.removeRange(0,_samples.length-n);
+    final snapshot=List<int>.from(_samples);
+    _processing=true;
 
-    final p=_pitch(_samples);
-    if(p==null)return;
+    try{
+      final p=_pitch(snapshot);
+      if(p==null)return;
 
-    // The working tuner always maps the detected pitch to the nearest
-    // standard-tuning target. This is what makes A -> D -> G -> B etc.
-    // follow the string that was actually plucked.
-    final idx=_near(p.f);
-    final c=(1200*math.log(p.f/_ns[idx].f)/math.ln2).clamp(-50.0,50.0).toDouble();
-    final tuned=c.abs()<=5.0 && p.c>=.55;
+      final idx=_near(p.f);
+      final target=_ns[idx].f;
+      final c=(1200*math.log(p.f/target)/math.ln2).clamp(-50.0,50.0).toDouble();
+      final tuned=c.abs()<=5.0&&p.c>=.55;
 
-    if(tuned){
-      _done.add(idx);
-      if(!lastOk&&!busy){
-        lastOk=true;
-        unawaited(_chime());
+      // Require two consistent pitch windows before changing the displayed
+      // string. This prevents harmonics/noise from locking the tuner onto
+      // the wrong string while still making E -> A -> D -> G -> B -> E fast.
+      if(idx==_candidate){
+        _candidateHits++;
+      }else{
+        _candidate=idx;
+        _candidateHits=1;
       }
-    }else{
-      lastOk=false;
-    }
+      if(_candidateHits<2&&idx!=detected)return;
 
-    if(mounted)setState((){
-      selected=idx;
-      detected=idx;
-      has=true;
-      ok=tuned;
-      hz=p.f;
-      cents=c;
-      level=(p.c.clamp(0.0,1.0)).toDouble();
-    });
+      if(tuned){
+        final wasDone=_done.contains(idx);
+        _done.add(idx);
+        if(!wasDone){
+          unawaited(_chime());
+        }
+        lastOk=true;
+      }else{
+        lastOk=false;
+      }
+
+      if(mounted)setState((){
+        selected=idx;
+        detected=idx;
+        has=true;
+        ok=tuned;
+        hz=p.f;
+        cents=c;
+        level=p.c.clamp(0.0,1.0).toDouble();
+      });
+    }finally{
+      _processing=false;
+    }
   }
 
   final List<int> _samples=<int>[];
@@ -140,6 +165,10 @@ class _TunerState extends State<GuitarTunerSheet> with SingleTickerProviderState
     lastOk=false;
     busy=false;
     _samples.clear();
+    _processing=false;
+    _candidate=-1;
+    _candidateHits=0;
+    _lastPitchProcess=DateTime.fromMillisecondsSinceEpoch(0);
     selected=5;
     detected=5;
     has=false;
@@ -152,9 +181,15 @@ class _TunerState extends State<GuitarTunerSheet> with SingleTickerProviderState
     if(mounted)setState((){});
   }
   Future<void> _chime() async{
-    busy=true;try{await _p.stop();await _p.play(BytesSource(_wav()),volume:.65);}catch(_){}
-    await Future<void>.delayed(const Duration(milliseconds:350));busy=false;
+    // Do not wait for playback on the microphone/pitch callback path.
+    // Waiting here can make the tuner appear frozen immediately after a
+    // successful note.
+    try{
+      await _p.stop();
+      await _p.play(BytesSource(_wav()),volume:.65);
+    }catch(_){}
   }
+
   Uint8List _wav(){const sr=44100,n=13230;final b=ByteData(44+n*2);void s(int o,String v){for(var i=0;i<v.length;i++)b.setUint8(o+i,v.codeUnitAt(i));}
     s(0,'RIFF');b.setUint32(4,36+n*2,Endian.little);s(8,'WAVE');s(12,'fmt ');b.setUint32(16,16,Endian.little);b.setUint16(20,1,Endian.little);b.setUint16(22,1,Endian.little);
     b.setUint32(24,sr,Endian.little);b.setUint32(28,sr*2,Endian.little);b.setUint16(32,2,Endian.little);b.setUint16(34,16,Endian.little);s(36,'data');b.setUint32(40,n*2,Endian.little);
