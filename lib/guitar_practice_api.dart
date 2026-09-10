@@ -63,20 +63,14 @@ class GuitarPracticeApi {
   late final Databases _databases = Databases(_client);
 
   void _validateConfig() {
-    if (AppwriteConfig.projectId.isEmpty) {
-      throw Exception('APPWRITE_PROJECT_ID is not configured');
-    }
-    if (AppwriteConfig.databaseId.isEmpty) {
-      throw Exception('APPWRITE_DATABASE_ID is not configured');
-    }
+    if (AppwriteConfig.projectId.isEmpty) throw Exception('APPWRITE_PROJECT_ID is not configured');
+    if (AppwriteConfig.databaseId.isEmpty) throw Exception('APPWRITE_DATABASE_ID is not configured');
   }
 
-  Future<GuitarPracticeResponse> list() async {
-    _validateConfig();
+  Future<List<Document>> _allDocuments() async {
     const pageSize = 100;
     final documents = <Document>[];
     var offset = 0;
-
     while (true) {
       final result = await _databases.listDocuments(
         databaseId: AppwriteConfig.databaseId,
@@ -87,18 +81,15 @@ class GuitarPracticeApi {
       if (result.documents.length < pageSize) break;
       offset += pageSize;
     }
+    return documents;
+  }
 
-    final practices = documents
+  Future<GuitarPracticeResponse> list() async {
+    _validateConfig();
+    final practices = (await _allDocuments())
         .map(GuitarPractice.fromDocument)
         .toList(growable: false);
-
-    // dailyPracticeTime is the accumulated practice time in minutes.
-    // It is now the source of today's practice total.
-    final total = practices.fold<int>(
-      0,
-      (sum, practice) => sum + practice.dailyPracticeTime,
-    );
-
+    final total = practices.fold<int>(0, (sum, practice) => sum + practice.dailyPracticeTime);
     return GuitarPracticeResponse(
       date: _dateString(DateTime.now()),
       dailyPracticeTime: total,
@@ -106,36 +97,41 @@ class GuitarPracticeApi {
     );
   }
 
-  Future<int> recordPractice(
-    String id, {
-    required int practicedSeconds,
-  }) async {
+  // dailyPracticeTime is a daily counter. The app calls this once when a new
+  // calendar day is detected so today's total starts at 00:00.
+  Future<void> resetDailyPracticeTime() async {
+    _validateConfig();
+    for (final document in await _allDocuments()) {
+      final current = (document.data['dailyPracticeTime'] as num?)?.toInt() ?? 0;
+      if (current == 0) continue;
+      await _databases.updateDocument(
+        databaseId: AppwriteConfig.databaseId,
+        collectionId: collectionId,
+        documentId: document.$id,
+        data: {'dailyPracticeTime': 0},
+      );
+    }
+  }
+
+  Future<int> recordPractice(String id, {required int practicedSeconds}) async {
     _validateConfig();
     if (id.trim().isEmpty) throw Exception('Practice id is empty');
     if (practicedSeconds <= 0) throw Exception('No practice time to record');
-
     final document = await _databases.getDocument(
       databaseId: AppwriteConfig.databaseId,
       collectionId: collectionId,
       documentId: id,
     );
-
     final current = (document.data['dailyPracticeTime'] as num?)?.toInt() ?? 0;
     final addedMinutes = practicedSeconds ~/ 60;
-    if (addedMinutes <= 0) {
-      throw Exception('Practice less than one minute cannot be recorded yet');
-    }
-
+    if (addedMinutes <= 0) throw Exception('Practice less than one minute cannot be recorded yet');
     final updated = current + addedMinutes;
-
     await _databases.updateDocument(
       databaseId: AppwriteConfig.databaseId,
       collectionId: collectionId,
       documentId: id,
       data: {'dailyPracticeTime': updated},
     );
-
-    // Deliberately do NOT update completed here.
     return updated;
   }
 
@@ -189,9 +185,7 @@ class GuitarPracticeApi {
     if (value.containsKey('completed')) data['completed'] = value['completed'] == true;
     if (value.containsKey('suggestedTime')) data['suggestedTime'] = value['suggestedTime']?.toString() ?? '';
     if (value.containsKey('description')) data['description'] = value['description']?.toString() ?? '';
-    if (value.containsKey('dailyPracticeTime') && value['dailyPracticeTime'] is num) {
-      data['dailyPracticeTime'] = (value['dailyPracticeTime'] as num).toInt();
-    }
+    if (value.containsKey('dailyPracticeTime') && value['dailyPracticeTime'] is num) data['dailyPracticeTime'] = (value['dailyPracticeTime'] as num).toInt();
     if (value.containsKey('link')) data['link'] = value['link']?.toString().trim() ?? '';
     if (value.containsKey('category')) data['category'] = value['category']?.toString().trim() ?? '';
     if (value.containsKey('level')) {
@@ -201,8 +195,5 @@ class GuitarPracticeApi {
     return data;
   }
 
-  String _dateString(DateTime value) =>
-      '${value.year.toString().padLeft(4, '0')}-'
-      '${value.month.toString().padLeft(2, '0')}-'
-      '${value.day.toString().padLeft(2, '0')}';
+  String _dateString(DateTime value) => '${value.year.toString().padLeft(4, '0')}-${value.month.toString().padLeft(2, '0')}-${value.day.toString().padLeft(2, '0')}';
 }
